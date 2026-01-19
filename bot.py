@@ -77,7 +77,7 @@ from utils import create_easypay_url, create_payment_with_qrcode
 from pay_server import start_flask_server
 
 # 导入代理管理模块（合并后的单文件）
-from headquarters_agent_system import (
+from bot_agent import (
     # 代理管理
     show_agent_management,
     show_agent_list,
@@ -4710,6 +4710,7 @@ def backstart(update: Update, context: CallbackContext):
         InlineKeyboardButton('库存预警', callback_data='stock_alerts'),
         InlineKeyboardButton('数据导出', callback_data='data_export_menu'),
         InlineKeyboardButton('多语言管理', callback_data='multilang_management'),
+        InlineKeyboardButton('🤖 代理管理', callback_data='agent_management'),
     ]
     admin_buttons = [admin_buttons_raw[i:i + 3] for i in range(0, len(admin_buttons_raw), 3)]
     admin_buttons.append([InlineKeyboardButton('关闭面板', callback_data=f'close {user_id}')])
