@@ -3957,8 +3957,7 @@ def agent_sifa(update: Update, context: CallbackContext):
         [InlineKeyboardButton('🖼 图文设置', callback_data='agent_tuwen'),
          InlineKeyboardButton('🔘 按钮设置', callback_data='agent_anniu')],
         [InlineKeyboardButton('👁 查看图文', callback_data='agent_cattu'),
-         InlineKeyboardButton('📢 私发状态', callback_data='agent_kaiqisifa')],
-        [InlineKeyboardButton('🚀 立即群发', callback_data='agent_fbgg')],
+         InlineKeyboardButton('🚀 立即群发', callback_data='agent_fbgg')],
         [InlineKeyboardButton('🔙 返回管理面板', callback_data='admin_panel')]
     ]
     
@@ -4215,8 +4214,7 @@ def agent_fbgg(update: Update, context: CallbackContext):
         [InlineKeyboardButton('🖼 图文设置', callback_data='agent_tuwen'),
          InlineKeyboardButton('🔘 按钮设置', callback_data='agent_anniu')],
         [InlineKeyboardButton('👁 查看图文', callback_data='agent_cattu'),
-         InlineKeyboardButton('📢 私发状态', callback_data='agent_kaiqisifa')],
-        [InlineKeyboardButton('🚀 立即群发', callback_data='agent_fbgg')],
+         InlineKeyboardButton('🚀 立即群发', callback_data='agent_fbgg')],
         [InlineKeyboardButton('🔙 返回管理面板', callback_data='admin_panel')]
     ]
     
