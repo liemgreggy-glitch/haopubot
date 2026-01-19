@@ -11,10 +11,11 @@ import zipfile
 import time
 import re
 import qrcode
+import pickle
 from io import BytesIO
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 
 # 翻译系统
@@ -59,7 +60,9 @@ from mongo import (
     beijing_now_str,
     format_beijing_time,
     get_beijing_now,
-    standard_num
+    standard_num,
+    sftw,
+    sifatuwen
 )
 
 
@@ -1087,6 +1090,99 @@ def handle_quantity_input(update: Update, context: CallbackContext):
     
     # 获取用户语言
     lang = get_user_lang(user_id)
+    
+    # 检查是否在等待代理私信图文输入
+    if context.user_data.get(f'agent_waiting_tuwen{user_id}'):
+        # 验证是否为管理员
+        if not is_admin(user_id):
+            return
+        
+        # 删除等待标记
+        del context.user_data[f'agent_waiting_tuwen{user_id}']
+        
+        # 处理图文内容
+        if update.message.photo:
+            # 图片+文字
+            r_text = update.message.caption if update.message.caption else ''
+            file = update.message.photo[-1].file_id
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'text': r_text}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'file_id': file}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'send_type': 'photo'}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'state': 1}})
+            message_id = context.bot.send_message(chat_id=user_id, text='✅ 图文设置成功（图片）')
+        elif update.message.animation:
+            # 动画+文字
+            r_text = update.message.caption if update.message.caption else ''
+            file = update.message.animation.file_id
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'text': r_text}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'file_id': file}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'send_type': 'animation'}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'state': 1}})
+            message_id = context.bot.send_message(chat_id=user_id, text='✅ 图文设置成功（动画）')
+        else:
+            # 纯文字
+            r_text = text
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'text': r_text}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'file_id': ''}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'send_type': 'text'}})
+            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'state': 1}})
+            message_id = context.bot.send_message(chat_id=user_id, text='✅ 图文设置成功（文字）')
+        
+        time.sleep(3)
+        try:
+            context.bot.delete_message(chat_id=user_id, message_id=message_id.message_id)
+        except:
+            pass
+        
+        # 删除提示消息
+        wanfa_msg_id = context.user_data.get(f'agent_wanfapeizhi{user_id}')
+        if wanfa_msg_id:
+            try:
+                context.bot.delete_message(chat_id=user_id, message_id=wanfa_msg_id.message_id)
+            except:
+                pass
+            del context.user_data[f'agent_wanfapeizhi{user_id}']
+        
+        return
+    
+    # 检查是否在等待代理私信按钮输入
+    if context.user_data.get(f'agent_waiting_anniu{user_id}'):
+        # 验证是否为管理员
+        if not is_admin(user_id):
+            return
+        
+        # 删除等待标记
+        del context.user_data[f'agent_waiting_anniu{user_id}']
+        
+        # 处理按钮设置
+        keyboard = parse_urls(text)
+        dumped = pickle.dumps(keyboard)
+        sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'keyboard': dumped}})
+        sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'key_text': text}})
+        
+        try:
+            message_id = context.bot.send_message(
+                chat_id=user_id, 
+                text='✅ 按钮设置成功',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            time.sleep(10)
+            context.bot.delete_message(chat_id=user_id, message_id=message_id.message_id)
+        except:
+            message_id = context.bot.send_message(chat_id=user_id, text='✅ 按钮设置成功')
+            time.sleep(3)
+            context.bot.delete_message(chat_id=user_id, message_id=message_id.message_id)
+        
+        # 删除提示消息
+        wanfa_msg_id = context.user_data.get(f'agent_wanfapeizhi{user_id}')
+        if wanfa_msg_id:
+            try:
+                context.bot.delete_message(chat_id=user_id, message_id=wanfa_msg_id.message_id)
+            except:
+                pass
+            del context.user_data[f'agent_wanfapeizhi{user_id}']
+        
+        return
     
     # 检查是否在等待提现地址输入
     if context.user_data.get('waiting_for_withdraw_address'):
@@ -2917,6 +3013,7 @@ def show_admin_panel(update: Update, context: CallbackContext, is_command: bool 
             InlineKeyboardButton("💸 申请提现", callback_data="admin_withdraw"),
             InlineKeyboardButton("📦 商品库存", callback_data="admin_inventory")
         ],
+        [InlineKeyboardButton("📢 用户私信", callback_data="agent_sifa")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="back_to_main")]
     ]
     
@@ -3796,6 +3893,346 @@ def show_admin_inventory_list(update: Update, context: CallbackContext):
     )
 
 
+# ==================== 用户私信广播功能 ====================
+
+def parse_url(content):
+    """解析单个按钮格式：名称&链接"""
+    args = content.split('&')
+    if len(args) < 2:
+        return [InlineKeyboardButton("格式错误，点击联系管理员", url="https://www.baidu.com")]
+    else:
+        title = args[0].strip()
+        url = args[1].strip() if len(args) >= 2 else None
+        return [InlineKeyboardButton(title, url=url)]
+
+
+def parse_urls(content, maxurl=99):
+    """解析多个按钮：按钮名称|链接（每行一个）"""
+    cnt_url = 0
+    keyboard = []
+    rows = content.split('\n')
+    for row in rows:
+        krow = []
+        els = row.split('|')
+        for el in els:
+            kel = parse_url(el)
+            if not kel:
+                continue
+            krow = krow + kel
+            cnt_url = cnt_url + 1
+            if cnt_url == maxurl:
+                break
+        keyboard.append(krow)
+        if cnt_url == maxurl:
+            break
+    return keyboard
+
+
+def agent_sifa(update: Update, context: CallbackContext):
+    """用户私信主菜单"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    # 权限检查
+    if not is_admin(user_id):
+        query.answer("❌ 无权限访问", show_alert=True)
+        return
+    
+    # 确保配置存在
+    fqdtw_list = sftw.find_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'})
+    if fqdtw_list is None:
+        sifatuwen(AGENT_BOT_ID, '图文1🔽', '', '', '', b'\x80\x03]q\x00]q\x01a.', '')
+        fqdtw_list = sftw.find_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'})
+    
+    state = fqdtw_list['state']
+    
+    # 菜单按钮
+    keyboard = [
+        [InlineKeyboardButton('🖼 图文设置', callback_data='agent_tuwen'),
+         InlineKeyboardButton('🔘 按钮设置', callback_data='agent_anniu')],
+        [InlineKeyboardButton('👁 查看图文', callback_data='agent_cattu'),
+         InlineKeyboardButton('📢 私发状态', callback_data='agent_kaiqisifa')],
+        [InlineKeyboardButton('🚀 立即群发', callback_data='agent_fbgg')],
+        [InlineKeyboardButton('🔙 返回管理面板', callback_data='admin_panel')]
+    ]
+    
+    # 状态提示文本
+    if state == 1:
+        status_text = '📢 <b>用户私信管理</b>\n\n📴 私发状态：<b>已关闭🔴</b>'
+    else:
+        status_text = '📢 <b>用户私信管理</b>\n\n🟢 私发状态：<b>已开启🟢</b>'
+    
+    # 发送消息
+    query.edit_message_text(
+        text=status_text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def agent_tuwen(update: Update, context: CallbackContext):
+    """设置图文内容"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        query.answer("❌ 无权限访问", show_alert=True)
+        return
+    
+    context.user_data[f'agent_key{user_id}'] = query.message
+    message_id = context.bot.send_message(
+        chat_id=user_id, 
+        text='请回复图文内容或图片+文字\n\n支持HTML格式',
+        reply_markup=ForceReply(force_reply=True)
+    )
+    context.user_data[f'agent_wanfapeizhi{user_id}'] = message_id
+    context.user_data[f'agent_waiting_tuwen{user_id}'] = True
+
+
+def agent_anniu(update: Update, context: CallbackContext):
+    """设置按钮"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        query.answer("❌ 无权限访问", show_alert=True)
+        return
+    
+    context.user_data[f'agent_key{user_id}'] = query.message
+    message_id = context.bot.send_message(
+        chat_id=user_id,
+        text='请回复按钮设置\n\n格式：按钮名称&链接\n每行一个按钮，多个按钮用 | 分隔\n\n示例：\n官网&https://example.com\n支持&https://t.me/support|购买&https://example.com/buy',
+        reply_markup=ForceReply(force_reply=True)
+    )
+    context.user_data[f'agent_wanfapeizhi{user_id}'] = message_id
+    context.user_data[f'agent_waiting_anniu{user_id}'] = True
+
+
+def agent_cattu(update: Update, context: CallbackContext):
+    """预览图文"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        query.answer("❌ 无权限访问", show_alert=True)
+        return
+    
+    fqdtw_list = sftw.find_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'})
+    file_id = fqdtw_list['file_id']
+    file_text = fqdtw_list['text']
+    file_type = fqdtw_list['send_type']
+    key_text = fqdtw_list['key_text']
+    keyboard = pickle.loads(fqdtw_list['keyboard'])
+    keyboard.append([InlineKeyboardButton('✅已读（点击销毁此消息）', callback_data=f'close {user_id}')])
+    
+    if fqdtw_list['text'] == '' and fqdtw_list['file_id'] == '':
+        message_id = context.bot.send_message(chat_id=user_id, text='⚠️ 请先设置图文内容')
+        time.sleep(3)
+        try:
+            context.bot.delete_message(chat_id=user_id, message_id=message_id.message_id)
+        except:
+            pass
+    else:
+        try:
+            if key_text:
+                context.bot.send_message(chat_id=user_id, text=key_text)
+        except:
+            pass
+        
+        if file_type == 'text':
+            try:
+                message_id = context.bot.send_message(
+                    chat_id=user_id, 
+                    text=file_text,
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except:
+                message_id = context.bot.send_message(chat_id=user_id, text=file_text)
+        else:
+            if file_type == 'photo':
+                try:
+                    message_id = context.bot.send_photo(
+                        chat_id=user_id, 
+                        caption=file_text, 
+                        photo=file_id,
+                        parse_mode='HTML',
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                except:
+                    message_id = context.bot.send_photo(chat_id=user_id, caption=file_text, photo=file_id)
+            else:
+                try:
+                    message_id = context.bot.send_animation(
+                        chat_id=user_id, 
+                        caption=file_text, 
+                        animation=file_id,
+                        parse_mode='HTML',
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                except:
+                    message_id = context.bot.send_animation(chat_id=user_id, caption=file_text, animation=file_id)
+        
+        time.sleep(3)
+        try:
+            context.bot.delete_message(chat_id=user_id, message_id=message_id.message_id)
+        except:
+            pass
+
+
+def agent_kaiqisifa(update: Update, context: CallbackContext):
+    """切换私发状态"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        query.answer("❌ 无权限访问", show_alert=True)
+        return
+    
+    fqdtw_list = sftw.find_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'})
+    current_state = fqdtw_list['state']
+    
+    # 切换状态：0=开启，1=关闭
+    new_state = 0 if current_state == 1 else 1
+    sftw.update_one(
+        {'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, 
+        {'$set': {'state': new_state}}
+    )
+    
+    # 更新菜单
+    keyboard = [
+        [InlineKeyboardButton('🖼 图文设置', callback_data='agent_tuwen'),
+         InlineKeyboardButton('🔘 按钮设置', callback_data='agent_anniu')],
+        [InlineKeyboardButton('👁 查看图文', callback_data='agent_cattu'),
+         InlineKeyboardButton('📢 私发状态', callback_data='agent_kaiqisifa')],
+        [InlineKeyboardButton('🚀 立即群发', callback_data='agent_fbgg')],
+        [InlineKeyboardButton('🔙 返回管理面板', callback_data='admin_panel')]
+    ]
+    
+    if new_state == 1:
+        status_text = '📢 <b>用户私信管理</b>\n\n📴 私发状态：<b>已关闭🔴</b>\n\n新用户将不会自动收到广告'
+    else:
+        status_text = '📢 <b>用户私信管理</b>\n\n🟢 私发状态：<b>已开启🟢</b>\n\n新用户 /start 时将自动收到广告'
+    
+    query.edit_message_text(
+        text=status_text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def agent_fbgg(update: Update, context: CallbackContext):
+    """立即群发广告"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        query.answer("❌ 无权限访问", show_alert=True)
+        return
+    
+    # 获取广告配置
+    fqdtw_list = sftw.find_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'})
+    if not fqdtw_list or (fqdtw_list['text'] == '' and fqdtw_list['file_id'] == ''):
+        query.answer("⚠️ 请先设置广告内容", show_alert=True)
+        return
+    
+    file_id = fqdtw_list['file_id']
+    file_text = fqdtw_list['text']
+    file_type = fqdtw_list['send_type']
+    key_text = fqdtw_list['key_text']
+    keyboard_data = fqdtw_list['keyboard']
+    keyboard = pickle.loads(keyboard_data)
+    keyboard.append([InlineKeyboardButton('✅ 已读（点击销毁此消息）', callback_data='close 12321')])
+    markup = InlineKeyboardMarkup(keyboard)
+    
+    # 获取所有用户
+    agent_users = get_agent_bot_user_collection(AGENT_BOT_ID)
+    user_list = list(agent_users.find({}))
+    total_users = len(user_list)
+    
+    if total_users == 0:
+        query.answer("⚠️ 当前没有用户", show_alert=True)
+        return
+    
+    success = 0
+    fail = 0
+    
+    # 初始化进度消息
+    progress_msg = context.bot.send_message(
+        chat_id=user_id,
+        text=f"⏳ 正在准备群发内容，请稍等...\n📤 进度：0/{total_users}",
+        parse_mode='HTML'
+    )
+    
+    # 遍历发送
+    for idx, u in enumerate(user_list):
+        try:
+            uid = u['user_id']
+            
+            # 发送关键文本（如果有）
+            if key_text:
+                try:
+                    context.bot.send_message(chat_id=uid, text=key_text)
+                except:
+                    pass
+            
+            # 发送主内容
+            if file_type == 'text':
+                context.bot.send_message(chat_id=uid, text=file_text, parse_mode='HTML', reply_markup=markup)
+            elif file_type == 'photo':
+                context.bot.send_photo(chat_id=uid, photo=file_id, caption=file_text, parse_mode='HTML', reply_markup=markup)
+            elif file_type == 'animation':
+                context.bot.send_animation(chat_id=uid, animation=file_id, caption=file_text, parse_mode='HTML', reply_markup=markup)
+            else:
+                raise Exception("❌ 不支持的发送类型")
+            
+            success += 1
+            time.sleep(0.05)  # 防止限流
+        except Exception as e:
+            fail += 1
+            logging.warning(f"发送广告到用户 {uid} 失败: {e}")
+        
+        # 每10个更新一次进度，或最后一个
+        sent = success + fail
+        if sent % 10 == 0 or sent == total_users:
+            try:
+                context.bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=progress_msg.message_id,
+                    text=f"📤 私发中：<b>{sent}/{total_users}</b>\n✅ 成功：{success}  ❌ 失败：{fail}",
+                    parse_mode='HTML'
+                )
+            except:
+                pass
+    
+    # 计算成功率
+    success_rate = (success / total_users * 100) if total_users > 0 else 0
+    
+    # 最终结果
+    keyboard = [
+        [InlineKeyboardButton('🖼 图文设置', callback_data='agent_tuwen'),
+         InlineKeyboardButton('🔘 按钮设置', callback_data='agent_anniu')],
+        [InlineKeyboardButton('👁 查看图文', callback_data='agent_cattu'),
+         InlineKeyboardButton('📢 私发状态', callback_data='agent_kaiqisifa')],
+        [InlineKeyboardButton('🚀 立即群发', callback_data='agent_fbgg')],
+        [InlineKeyboardButton('🔙 返回管理面板', callback_data='admin_panel')]
+    ]
+    
+    context.bot.edit_message_text(
+        chat_id=user_id,
+        message_id=progress_msg.message_id,
+        text=f"✅ 群发任务已完成！\n\n<b>总用户数：</b>{total_users} 人\n<b>成功：</b>{success} 人\n<b>失败：</b>{fail} 人\n<b>成功率：</b>{success_rate:.1f}%",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 def close_message(update: Update, context: CallbackContext):
     """关闭/删除消息"""
     query = update.callback_query
@@ -3899,6 +4336,14 @@ def main():
     # 商品库存相关
     dispatcher.add_handler(CallbackQueryHandler(show_admin_inventory, pattern='^admin_inventory$'))
     dispatcher.add_handler(CallbackQueryHandler(show_admin_inventory_list, pattern=r'^admin_inventory_filter_'))
+    
+    # 用户私信相关
+    dispatcher.add_handler(CallbackQueryHandler(agent_sifa, pattern='^agent_sifa$'))
+    dispatcher.add_handler(CallbackQueryHandler(agent_tuwen, pattern='^agent_tuwen$'))
+    dispatcher.add_handler(CallbackQueryHandler(agent_anniu, pattern='^agent_anniu$'))
+    dispatcher.add_handler(CallbackQueryHandler(agent_cattu, pattern='^agent_cattu$'))
+    dispatcher.add_handler(CallbackQueryHandler(agent_kaiqisifa, pattern='^agent_kaiqisifa$'))
+    dispatcher.add_handler(CallbackQueryHandler(agent_fbgg, pattern='^agent_fbgg$'))
     
     # 其他
     dispatcher.add_handler(CallbackQueryHandler(back_to_main, pattern='^back_to_main$'))
