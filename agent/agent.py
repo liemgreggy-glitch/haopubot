@@ -103,6 +103,9 @@ PERMANENT_USERNAME = os.getenv('PERMANENT_USERNAME', '')
 NOTIFICATION_GROUP = os.getenv('NOTIFICATION_GROUP', '')
 PURCHASE_NOTICE = os.getenv('PURCHASE_NOTICE', '')
 PURCHASE_NOTICE_EN = os.getenv('PURCHASE_NOTICE_EN', '')
+
+# 私信广播配置
+BROADCAST_DELAY = float(os.getenv('BROADCAST_DELAY', '0.05'))  # 群发消息间隔（秒），防止限流
 AGENT_ORDER_NOTIFY_GROUP = os.getenv('AGENT_ORDER_NOTIFY_GROUP', '')
 
 # 文件路径配置
@@ -1105,27 +1108,27 @@ def handle_quantity_input(update: Update, context: CallbackContext):
             # 图片+文字
             r_text = update.message.caption if update.message.caption else ''
             file = update.message.photo[-1].file_id
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'text': r_text}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'file_id': file}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'send_type': 'photo'}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'state': 1}})
+            sftw.update_one(
+                {'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, 
+                {'$set': {'text': r_text, 'file_id': file, 'send_type': 'photo', 'state': 1}}
+            )
             message_id = context.bot.send_message(chat_id=user_id, text='✅ 图文设置成功（图片）')
         elif update.message.animation:
             # 动画+文字
             r_text = update.message.caption if update.message.caption else ''
             file = update.message.animation.file_id
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'text': r_text}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'file_id': file}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'send_type': 'animation'}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'state': 1}})
+            sftw.update_one(
+                {'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, 
+                {'$set': {'text': r_text, 'file_id': file, 'send_type': 'animation', 'state': 1}}
+            )
             message_id = context.bot.send_message(chat_id=user_id, text='✅ 图文设置成功（动画）')
         else:
             # 纯文字
             r_text = text
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'text': r_text}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'file_id': ''}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'send_type': 'text'}})
-            sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'state': 1}})
+            sftw.update_one(
+                {'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, 
+                {'$set': {'text': r_text, 'file_id': '', 'send_type': 'text', 'state': 1}}
+            )
             message_id = context.bot.send_message(chat_id=user_id, text='✅ 图文设置成功（文字）')
         
         time.sleep(3)
@@ -1157,8 +1160,10 @@ def handle_quantity_input(update: Update, context: CallbackContext):
         # 处理按钮设置
         keyboard = parse_urls(text)
         dumped = pickle.dumps(keyboard)
-        sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'keyboard': dumped}})
-        sftw.update_one({'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, {'$set': {'key_text': text}})
+        sftw.update_one(
+            {'bot_id': AGENT_BOT_ID, 'projectname': '图文1🔽'}, 
+            {'$set': {'keyboard': dumped, 'key_text': text}}
+        )
         
         try:
             message_id = context.bot.send_message(
@@ -4148,7 +4153,8 @@ def agent_fbgg(update: Update, context: CallbackContext):
     key_text = fqdtw_list['key_text']
     keyboard_data = fqdtw_list['keyboard']
     keyboard = pickle.loads(keyboard_data)
-    keyboard.append([InlineKeyboardButton('✅ 已读（点击销毁此消息）', callback_data='close 12321')])
+    # Add close button (use generic callback data since it's for all users)
+    keyboard.append([InlineKeyboardButton('✅ 已读（点击销毁此消息）', callback_data='close_broadcast_msg')])
     markup = InlineKeyboardMarkup(keyboard)
     
     # 获取所有用户
@@ -4193,7 +4199,7 @@ def agent_fbgg(update: Update, context: CallbackContext):
                 raise Exception("❌ 不支持的发送类型")
             
             success += 1
-            time.sleep(0.05)  # 防止限流
+            time.sleep(BROADCAST_DELAY)  # 防止限流
         except Exception as e:
             fail += 1
             logging.warning(f"发送广告到用户 {uid} 失败: {e}")
@@ -4238,13 +4244,13 @@ def close_message(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     
-    # 从callback_data提取用户ID
+    # 从callback_data提取用户ID或特殊标识
     data = query.data.replace("close_", "")
     user_id = query.from_user.id
     
-    # 验证是否是消息的拥有者
+    # 验证是否是消息的拥有者，或者是广播消息（任何人都可以删除）
     try:
-        if str(user_id) == data or data == str(user_id):
+        if str(user_id) == data or data == str(user_id) or data == "broadcast_msg":
             query.delete_message()
         else:
             query.answer("只能删除自己的消息", show_alert=True)
