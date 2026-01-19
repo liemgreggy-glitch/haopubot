@@ -92,6 +92,7 @@ from bot_agent import (
     show_agent_settings,
     show_agent_address_config,
     request_agent_address_input,
+    handle_agent_address_input,
     confirm_agent_address_change,
     # 提现管理
     show_withdrawal_management,
@@ -7613,7 +7614,6 @@ def textkeyboard(update: Update, context: CallbackContext):
         
         # 检查是否在等待代理地址输入（管理员功能）
         if is_admin(user_id):
-            from bot_agent import handle_agent_address_input
             if handle_agent_address_input(update, context, user_id, text):
                 return
 

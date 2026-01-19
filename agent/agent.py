@@ -3730,7 +3730,7 @@ def bind_wallet_address(update: Update, context: CallbackContext):
     
     # 绑定地址到代理账户
     try:
-        apply_time = format_beijing_time(datetime.now())
+        apply_time = beijing_now_str()  # 使用北京时间
         agent_bots.update_one(
             {'agent_bot_id': AGENT_BOT_ID},
             {
@@ -3793,9 +3793,15 @@ def submit_withdraw(update: Update, context: CallbackContext):
         query.answer("❌ 无权限访问", show_alert=True)
         return
     
-    # 从context获取地址和金额
-    address = context.user_data.get('withdraw_address', '')
+    # 获取代理信息以获取绑定的地址
+    agent_info = agent_bots.find_one({'agent_bot_id': AGENT_BOT_ID})
+    if not agent_info:
+        query.answer("系统错误，代理信息不存在", show_alert=True)
+        return
+    
+    # 从context获取金额，从数据库获取地址
     amount = context.user_data.get('withdraw_amount', 0)
+    address = context.user_data.get('withdraw_address', '') or agent_info.get('wallet_address', '')
     
     if not address or amount < 10:
         query.answer("提现信息错误，请重新申请", show_alert=True)
@@ -3805,9 +3811,11 @@ def submit_withdraw(update: Update, context: CallbackContext):
     from datetime import datetime
     import uuid
     
-    # 生成唯一提现单号（使用时间戳+随机后缀）
-    withdrawal_id = f"W{datetime.now().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:4].upper()}"
-    apply_time = beijing_now_str()  # 使用统一的时间格式函数
+    # 生成唯一提现单号（使用北京时间）
+    from mongo import get_beijing_now
+    beijing_time = get_beijing_now()
+    withdrawal_id = f"W{beijing_time.strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:4].upper()}"
+    apply_time = beijing_now_str()  # 使用北京时间
     
     # 原子操作：检查余额并扣除
     result = agent_bots.find_one_and_update(
