@@ -88,6 +88,12 @@ from bot_agent import (
     delete_agent_confirm,
     delete_agent,
     show_agent_stats,
+    # 代理设置
+    show_agent_settings,
+    show_agent_address_config,
+    request_agent_address_input,
+    handle_agent_address_input,
+    confirm_agent_address_change,
     # 提现管理
     show_withdrawal_management,
     show_pending_withdrawals,
@@ -7605,6 +7611,11 @@ def textkeyboard(update: Update, context: CallbackContext):
             # 营业状态为关闭时，只允许管理员访问
             if not is_admin(user_id):
                 return
+        
+        # 检查是否在等待代理地址输入（管理员功能）
+        if is_admin(user_id):
+            if handle_agent_address_input(update, context, user_id, text):
+                return
 
         get_key_list = get_key.find({})
         get_prolist = []
@@ -12049,6 +12060,12 @@ def main():
     dispatcher.add_handler(CallbackQueryHandler(delete_agent_confirm, pattern=r'^agent_delete_confirm_'))
     dispatcher.add_handler(CallbackQueryHandler(delete_agent, pattern=r'^agent_delete_'))
     dispatcher.add_handler(CallbackQueryHandler(show_agent_stats, pattern=r'^agent_stats_'))
+    
+    # ⚙️ 代理设置管理回调处理器
+    dispatcher.add_handler(CallbackQueryHandler(show_agent_settings, pattern=r'^agent_settings_'))
+    dispatcher.add_handler(CallbackQueryHandler(show_agent_address_config, pattern=r'^agent_config_address_'))
+    dispatcher.add_handler(CallbackQueryHandler(request_agent_address_input, pattern=r'^agent_modify_address_'))
+    dispatcher.add_handler(CallbackQueryHandler(confirm_agent_address_change, pattern=r'^agent_confirm_address_'))
     
     # 💸 代理提现管理回调处理器
     dispatcher.add_handler(CallbackQueryHandler(show_withdrawal_management, pattern='^agent_withdrawal_manage$'))

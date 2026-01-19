@@ -1189,7 +1189,7 @@ def handle_quantity_input(update: Update, context: CallbackContext):
         
         return
     
-    # 检查是否在等待提现地址输入
+    # 检查是否在等待提现地址输入（地址绑定）
     if context.user_data.get('waiting_for_withdraw_address'):
         # 验证是否为管理员
         if not is_admin(user_id):
@@ -1197,22 +1197,30 @@ def handle_quantity_input(update: Update, context: CallbackContext):
         
         # 简单验证地址格式（TRC20地址通常以T开头，34个字符）
         if not text.startswith('T') or len(text) != 34:
-            if lang == 'zh':
-                update.message.reply_text(
-                    "❌ 地址格式不正确，请输入正确的TRC20地址\n"
-                    "TRC20地址应以T开头，共34个字符\n"
-                    "⚠️ 请仔细核对地址，避免资金损失"
-                )
-            else:
-                update.message.reply_text(
-                    "❌ Invalid address format, please enter a valid TRC20 address\n"
-                    "TRC20 address should start with T and be 34 characters\n"
-                    "⚠️ Please double check the address to avoid loss of funds"
-                )
+            update.message.reply_text(
+                "❌ 地址格式不正确，请输入正确的TRC20地址\n"
+                "TRC20地址应以T开头，共34个字符\n"
+                "⚠️ 请仔细核对地址，避免资金损失"
+            )
             return
         
-        # 调用确认提现函数
-        confirm_withdraw(update, context, text)
+        # 检查是地址绑定还是提现确认
+        if context.user_data.get('withdraw_address_binding'):
+            # 地址绑定流程
+            handle_address_binding(update, context, text)
+        else:
+            # 兼容旧版提现流程（已弃用，将在未来版本移除）
+            # TODO: 此代码路径在下一个主要版本中将被移除
+            confirm_withdraw(update, context, text)
+        return
+    
+    # 检查是否在等待提现金额输入
+    if context.user_data.get('waiting_for_withdraw_amount'):
+        # 验证是否为管理员
+        if not is_admin(user_id):
+            return
+        
+        handle_withdraw_amount_input(update, context, text)
         return
     
     # 获取用户信息
@@ -3405,7 +3413,7 @@ def show_admin_withdraw(update: Update, context: CallbackContext):
 
 
 def show_admin_withdraw_apply(update: Update, context: CallbackContext):
-    """申请提现 - 选择金额"""
+    """申请提现 - 检查地址绑定并引导输入金额"""
     query = update.callback_query
     query.answer()
     
@@ -3413,34 +3421,61 @@ def show_admin_withdraw_apply(update: Update, context: CallbackContext):
         query.answer("❌ 无权限访问", show_alert=True)
         return
     
-    # 获取可提现余额
+    user_id = query.from_user.id
+    
+    # 获取代理信息
     agent_info = agent_bots.find_one({'agent_bot_id': AGENT_BOT_ID})
     available_balance = agent_info.get('available_balance', 0) if agent_info else 0
+    wallet_address = agent_info.get('wallet_address', '') if agent_info else ''
     
     if available_balance < 10:
         query.answer("余额不足10 USDT", show_alert=True)
         return
     
-    text = f"""
-💵 <b>申请提现</b>
+    # 检查是否已绑定地址
+    if not wallet_address:
+        # 未绑定地址，提示输入
+        text = f"""
+💰 <b>申请提现</b>
 
-💰 可提现金额：{available_balance:.2f} USDT
+💵 可提现金额：{available_balance:.2f} USDT
 
-请选择提现金额：
-    """.strip()
-    
-    keyboard = [
-        [InlineKeyboardButton(f"全部提现 {available_balance:.2f}", 
-                              callback_data=f"admin_withdraw_amount_{available_balance:.2f}")]
-    ]
-    
-    # 添加快捷金额选项
-    for amount in [100, 200, 500]:
-        if amount <= available_balance:
-            keyboard.append([InlineKeyboardButton(f"{amount} USDT", 
-                                                   callback_data=f"admin_withdraw_amount_{amount}")])
-    
-    keyboard.append([InlineKeyboardButton("🔙 返回", callback_data="admin_withdraw")])
+⚠️ <b>您还未绑定收款地址</b>
+请输入您的 TRC20 收款地址：
+
+💡 地址格式：T开头，34位字符
+⚠️ 地址绑定后如需修改请联系管理员
+        """.strip()
+        
+        keyboard = [
+            [InlineKeyboardButton("❌ 取消", callback_data="admin_withdraw")]
+        ]
+        
+        # 设置状态，等待地址输入
+        context.user_data['waiting_for_withdraw_address'] = True
+        context.user_data['withdraw_address_binding'] = True
+    else:
+        # 已绑定地址，显示地址并提示输入金额
+        # 显示地址简写
+        address_display = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+        
+        text = f"""
+💰 <b>申请提现</b>
+
+💵 可提现金额：{available_balance:.2f} USDT
+💳 收款地址：<code>{address_display}</code>
+
+📝 请输入提现金额（最低 10 USDT）：
+
+发送 /cancel 取消操作
+        """.strip()
+        
+        keyboard = [
+            [InlineKeyboardButton("❌ 取消", callback_data="admin_withdraw")]
+        ]
+        
+        # 设置状态，等待金额输入
+        context.user_data['waiting_for_withdraw_amount'] = True
     
     query.edit_message_text(
         text=text,
@@ -3505,6 +3540,134 @@ def handle_withdraw_amount(update: Update, context: CallbackContext):
     )
 
 
+
+
+def handle_address_binding(update: Update, context: CallbackContext, address: str):
+    """处理地址绑定"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        update.message.reply_text("❌ 无权限访问")
+        return
+    
+    # 获取代理信息
+    agent_info = agent_bots.find_one({'agent_bot_id': AGENT_BOT_ID})
+    available_balance = agent_info.get('available_balance', 0) if agent_info else 0
+    
+    # 显示确认界面
+    text = f"""
+💳 <b>确认绑定收款地址</b>
+
+📍 收款地址：
+<code>{address}</code>
+
+⚠️ <b>重要提示：</b>
+• 地址绑定后您将<b>无法自行修改</b>
+• 如需修改，请联系总部管理员
+• 请务必确认地址正确无误
+
+确认绑定此地址吗？
+    """.strip()
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("❌ 取消", callback_data="admin_withdraw"),
+            InlineKeyboardButton("✅ 确认绑定", callback_data=f"admin_withdraw_bind_address")
+        ]
+    ]
+    
+    # 存储地址到context
+    context.user_data['withdraw_address'] = address
+    
+    # 清除等待状态
+    context.user_data.pop('waiting_for_withdraw_address', None)
+    context.user_data.pop('withdraw_address_binding', None)
+    
+    update.message.reply_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def handle_withdraw_amount_input(update: Update, context: CallbackContext, amount_str: str):
+    """处理用户输入的提现金额"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        update.message.reply_text("❌ 无权限访问")
+        return
+    
+    # 验证金额格式
+    try:
+        amount = float(amount_str)
+    except ValueError:
+        update.message.reply_text(
+            "❌ 金额格式错误，请输入数字\n"
+            "示例：50 或 50.5"
+        )
+        return
+    
+    # 验证金额范围
+    if amount < 10:
+        update.message.reply_text(
+            "❌ 提现金额不能低于 10 USDT\n"
+            "请重新输入金额"
+        )
+        return
+    
+    # 获取可用余额
+    agent_info = agent_bots.find_one({'agent_bot_id': AGENT_BOT_ID})
+    available_balance = agent_info.get('available_balance', 0) if agent_info else 0
+    wallet_address = agent_info.get('wallet_address', '') if agent_info else ''
+    
+    if amount > available_balance:
+        update.message.reply_text(
+            f"❌ 提现金额超过可用余额\n\n"
+            f"可用余额：{available_balance:.2f} USDT\n"
+            f"请求金额：{amount:.2f} USDT\n\n"
+            f"请重新输入金额"
+        )
+        return
+    
+    # 计算提现后余额
+    new_balance = available_balance - amount
+    
+    # 显示地址简写
+    address_display = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+    
+    # 显示确认界面
+    text = f"""
+💰 <b>确认提现</b>
+
+💵 提现金额：{amount:.2f} USDT
+💰 当前余额：{available_balance:.2f} USDT
+💰 提现后余额：{new_balance:.2f} USDT
+💳 收款地址：<code>{address_display}</code>
+
+确认提交提现申请吗？
+    """.strip()
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("❌ 取消", callback_data="admin_withdraw"),
+            InlineKeyboardButton("✅ 确认提现", callback_data=f"admin_withdraw_confirm_final")
+        ]
+    ]
+    
+    # 存储金额到context
+    context.user_data['withdraw_amount'] = amount
+    
+    # 清除等待状态
+    context.user_data.pop('waiting_for_withdraw_amount', None)
+    
+    update.message.reply_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 def confirm_withdraw(update: Update, context: CallbackContext, address: str):
     """确认提现"""
     user_id = update.effective_user.id
@@ -3549,6 +3712,78 @@ def confirm_withdraw(update: Update, context: CallbackContext, address: str):
     context.user_data.pop('waiting_for_withdraw_address', None)
 
 
+def bind_wallet_address(update: Update, context: CallbackContext):
+    """确认绑定钱包地址"""
+    query = update.callback_query
+    query.answer()
+    
+    if not is_admin(query.from_user.id):
+        query.answer("❌ 无权限访问", show_alert=True)
+        return
+    
+    # 从context获取地址
+    address = context.user_data.get('withdraw_address', '')
+    
+    if not address or not address.startswith('T') or len(address) != 34:
+        query.answer("地址信息错误，请重新操作", show_alert=True)
+        return
+    
+    # 绑定地址到代理账户
+    try:
+        apply_time = beijing_now_str()  # 使用北京时间
+        agent_bots.update_one(
+            {'agent_bot_id': AGENT_BOT_ID},
+            {
+                '$set': {
+                    'wallet_address': address,
+                    'wallet_address_bind_time': apply_time
+                }
+            }
+        )
+        
+        # 清除context中的临时数据
+        context.user_data.pop('withdraw_address', None)
+        
+        # 获取可用余额
+        agent_info = agent_bots.find_one({'agent_bot_id': AGENT_BOT_ID})
+        available_balance = agent_info.get('available_balance', 0) if agent_info else 0
+        
+        # 显示地址简写
+        address_display = f"{address[:6]}...{address[-4:]}"
+        
+        text = f"""
+✅ <b>地址绑定成功</b>
+
+💳 收款地址：<code>{address_display}</code>
+⏰ 绑定时间：{apply_time}
+
+💰 可提现金额：{available_balance:.2f} USDT
+
+📝 请输入提现金额（最低 10 USDT）：
+
+发送 /cancel 取消操作
+        """.strip()
+        
+        keyboard = [
+            [InlineKeyboardButton("❌ 取消", callback_data="admin_withdraw")]
+        ]
+        
+        # 设置状态，等待金额输入
+        context.user_data['waiting_for_withdraw_amount'] = True
+        
+        query.edit_message_text(
+            text=text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        logging.info(f"✅ 代理绑定钱包地址成功: agent_bot_id={AGENT_BOT_ID}, address={address}")
+        
+    except Exception as e:
+        logging.error(f"❌ 绑定钱包地址失败: {e}")
+        query.answer("系统错误，请稍后重试", show_alert=True)
+
+
 def submit_withdraw(update: Update, context: CallbackContext):
     """提交提现申请"""
     query = update.callback_query
@@ -3558,9 +3793,15 @@ def submit_withdraw(update: Update, context: CallbackContext):
         query.answer("❌ 无权限访问", show_alert=True)
         return
     
-    # 从context获取地址和金额
-    address = context.user_data.get('withdraw_address', '')
+    # 获取代理信息以获取绑定的地址
+    agent_info = agent_bots.find_one({'agent_bot_id': AGENT_BOT_ID})
+    if not agent_info:
+        query.answer("系统错误，代理信息不存在", show_alert=True)
+        return
+    
+    # 从context获取金额，从数据库获取地址
     amount = context.user_data.get('withdraw_amount', 0)
+    address = context.user_data.get('withdraw_address', '') or agent_info.get('wallet_address', '')
     
     if not address or amount < 10:
         query.answer("提现信息错误，请重新申请", show_alert=True)
@@ -3570,9 +3811,11 @@ def submit_withdraw(update: Update, context: CallbackContext):
     from datetime import datetime
     import uuid
     
-    # 生成唯一提现单号（使用时间戳+随机后缀）
-    withdrawal_id = f"W{datetime.now().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:4].upper()}"
-    apply_time = format_beijing_time(datetime.now())
+    # 生成唯一提现单号（使用北京时间）
+    from mongo import get_beijing_now
+    beijing_time = get_beijing_now()
+    withdrawal_id = f"W{beijing_time.strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:4].upper()}"
+    apply_time = beijing_now_str()  # 使用北京时间
     
     # 原子操作：检查余额并扣除
     result = agent_bots.find_one_and_update(
@@ -3593,6 +3836,9 @@ def submit_withdraw(update: Update, context: CallbackContext):
         context.user_data.pop('withdraw_amount', None)
         context.user_data.pop('withdraw_address', None)
         return
+    
+    # 获取代理信息（用于通知）
+    agent_info = agent_bots.find_one({'agent_bot_id': AGENT_BOT_ID})
     
     # 创建提现记录
     try:
@@ -3618,21 +3864,50 @@ def submit_withdraw(update: Update, context: CallbackContext):
         query.answer("系统错误，请稍后重试", show_alert=True)
         return
     
+    # 发送通知到 AGENT_ORDER_NOTIFY_GROUP
+    if AGENT_ORDER_NOTIFY_GROUP and AGENT_ORDER_NOTIFY_GROUP.strip():
+        notify_text = f"""
+🔔 <b>新提现申请</b>
+
+👤 代理商：{agent_info.get('agent_name', 'Unknown') if agent_info else 'Unknown'}
+🆔 代理ID：{AGENT_BOT_ID}
+📋 订单号：<code>{withdrawal_id}</code>
+💵 金额：<b>{amount:.2f} USDT</b>
+💳 地址：<code>{address}</code>
+⏰ 时间：{apply_time}
+📊 状态：待处理
+        """.strip()
+        try:
+            group_id = int(AGENT_ORDER_NOTIFY_GROUP)
+            context.bot.send_message(
+                chat_id=group_id,
+                text=notify_text,
+                parse_mode='HTML'
+            )
+            logging.info(f"✅ 提现通知已发送到订单群")
+        except ValueError as e:
+            logging.error(f"❌ 订单群ID格式错误: {e}")
+        except Exception as e:
+            logging.error(f"❌ 发送提现通知失败: {e}")
+    
     # 清除用户数据
     context.user_data.pop('withdraw_amount', None)
     context.user_data.pop('withdraw_address', None)
     
+    # 显示地址简写
+    address_display = f"{address[:6]}...{address[-4:]}"
+    
     text = f"""
 ✅ <b>提现申请已提交</b>
 
+📋 订单号：<code>{withdrawal_id}</code>
 💵 提现金额：{amount:.2f} USDT
-📍 收款地址：<code>{address}</code>
-🕐 申请时间：{apply_time}
-📋 申请单号：<code>{withdrawal_id}</code>
+💳 收款地址：<code>{address_display}</code>
+📊 状态：待处理
 
-⏰ 预计24小时内审核完成，请耐心等待
-    """.strip()
-    
+⏰ 预计 24 小时内处理完成
+如有问题请联系总部客服
+    """.strip()    
     keyboard = [
         [InlineKeyboardButton("📋 查看提现记录", callback_data="admin_withdraw_records_1")],
         [InlineKeyboardButton("🔙 返回", callback_data="admin_withdraw")]
@@ -3645,6 +3920,7 @@ def submit_withdraw(update: Update, context: CallbackContext):
     )
     
     logging.info(f"✅ 提现申请提交: agent={AGENT_BOT_ID}, id={withdrawal_id}, amount={amount}, address={address}")
+
 
 
 def show_withdraw_records(update: Update, context: CallbackContext):
@@ -4324,7 +4600,9 @@ def main():
     dispatcher.add_handler(CallbackQueryHandler(show_admin_withdraw, pattern='^admin_withdraw$'))
     dispatcher.add_handler(CallbackQueryHandler(show_admin_withdraw_apply, pattern='^admin_withdraw_apply$'))
     dispatcher.add_handler(CallbackQueryHandler(handle_withdraw_amount, pattern=r'^admin_withdraw_amount_'))
+    dispatcher.add_handler(CallbackQueryHandler(bind_wallet_address, pattern=r'^admin_withdraw_bind_address$'))
     dispatcher.add_handler(CallbackQueryHandler(submit_withdraw, pattern=r'^admin_withdraw_confirm$'))
+    dispatcher.add_handler(CallbackQueryHandler(submit_withdraw, pattern=r'^admin_withdraw_confirm_final$'))
     dispatcher.add_handler(CallbackQueryHandler(show_withdraw_records, pattern=r'^admin_withdraw_records_'))
     
     # 商品库存相关

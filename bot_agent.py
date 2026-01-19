@@ -580,6 +580,315 @@ def show_agent_stats(update: Update, context: CallbackContext):
     )
 
 
+# ==================== 代理设置管理模块 ====================
+
+def show_agent_settings(update: Update, context: CallbackContext):
+    """显示代理设置菜单"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    # 从callback_data中提取agent_bot_id
+    agent_bot_id = query.data.replace("agent_settings_", "")
+    
+    # 获取代理信息
+    agent = agent_bots.find_one({'agent_bot_id': agent_bot_id})
+    if not agent:
+        query.edit_message_text("❌ 代理不存在")
+        return
+    
+    agent_name = agent.get('agent_name', '未知代理')
+    wallet_address = agent.get('wallet_address', '')
+    
+    # 显示地址简写或未设置
+    if wallet_address:
+        address_display = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+        address_status = f"✅ 已绑定：<code>{address_display}</code>"
+    else:
+        address_status = "⚠️ 未设置"
+    
+    text = f"""
+⚙️ <b>代理设置</b>
+
+📋 代理名称：{agent_name}
+🆔 代理ID：<code>{agent_bot_id}</code>
+
+💳 <b>收款地址配置</b>
+{address_status}
+
+请选择操作：
+    """.strip()
+    
+    keyboard = [
+        [InlineKeyboardButton("💳 地址配置", callback_data=f"agent_config_address_{agent_bot_id}")],
+        [InlineKeyboardButton("🔙 返回详情", callback_data=f"agent_detail_{agent_bot_id}")],
+        [InlineKeyboardButton("❌ 关闭", callback_data=f"close {user_id}")]
+    ]
+    
+    query.edit_message_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def show_agent_address_config(update: Update, context: CallbackContext):
+    """显示代理地址配置界面"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    # 从callback_data中提取agent_bot_id
+    agent_bot_id = query.data.replace("agent_config_address_", "")
+    
+    # 获取代理信息
+    agent = agent_bots.find_one({'agent_bot_id': agent_bot_id})
+    if not agent:
+        query.edit_message_text("❌ 代理不存在")
+        return
+    
+    agent_name = agent.get('agent_name', '未知代理')
+    agent_username = agent.get('agent_username', 'unknown')
+    wallet_address = agent.get('wallet_address', '')
+    bind_time = agent.get('wallet_address_bind_time', '')
+    
+    # 显示完整地址或未设置
+    if wallet_address:
+        address_info = f"""
+💳 <b>当前收款地址</b>
+<code>{wallet_address}</code>
+
+⏰ 绑定时间：{bind_time if bind_time else '未知'}
+        """.strip()
+    else:
+        address_info = "⚠️ 当前未设置收款地址"
+    
+    text = f"""
+💳 <b>地址配置</b>
+
+📋 代理商：{agent_name}
+🆔 代理ID：<code>{agent_bot_id}</code>
+📱 Bot用户名：@{agent_username}
+
+{address_info}
+
+请选择操作：
+    """.strip()
+    
+    keyboard = []
+    
+    if wallet_address:
+        keyboard.append([InlineKeyboardButton("✏️ 修改地址", callback_data=f"agent_modify_address_{agent_bot_id}")])
+    else:
+        keyboard.append([InlineKeyboardButton("➕ 设置地址", callback_data=f"agent_modify_address_{agent_bot_id}")])
+    
+    keyboard.extend([
+        [InlineKeyboardButton("🔙 返回设置", callback_data=f"agent_settings_{agent_bot_id}")],
+        [InlineKeyboardButton("❌ 关闭", callback_data=f"close {user_id}")]
+    ])
+    
+    query.edit_message_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def request_agent_address_input(update: Update, context: CallbackContext):
+    """请求管理员输入代理地址"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    # 从callback_data中提取agent_bot_id
+    agent_bot_id = query.data.replace("agent_modify_address_", "")
+    
+    # 获取代理信息
+    agent = agent_bots.find_one({'agent_bot_id': agent_bot_id})
+    if not agent:
+        query.edit_message_text("❌ 代理不存在")
+        return
+    
+    agent_name = agent.get('agent_name', '未知代理')
+    wallet_address = agent.get('wallet_address', '')
+    
+    text = f"""
+💳 <b>设置收款地址</b>
+
+📋 代理商：{agent_name}
+🆔 代理ID：<code>{agent_bot_id}</code>
+
+💡 <b>请输入TRC20收款地址：</b>
+• 地址格式：T开头，34位字符
+• 请务必核对地址准确性
+
+    """.strip()
+    
+    if wallet_address:
+        text += f"\n\n当前地址：<code>{wallet_address}</code>"
+    
+    keyboard = [
+        [InlineKeyboardButton("❌ 取消", callback_data=f"agent_config_address_{agent_bot_id}")]
+    ]
+    
+    # 设置等待状态
+    context.user_data[f'waiting_for_agent_address_{user_id}'] = agent_bot_id
+    
+    query.edit_message_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def handle_agent_address_input(update: Update, context: CallbackContext, user_id: int, address: str):
+    """处理代理地址输入"""
+    # 获取等待的agent_bot_id
+    agent_bot_id = context.user_data.get(f'waiting_for_agent_address_{user_id}')
+    
+    if not agent_bot_id:
+        return False
+    
+    # 验证地址格式
+    if not address.startswith('T') or len(address) != 34:
+        update.message.reply_text(
+            "❌ 地址格式不正确\n\n"
+            "TRC20地址应以T开头，共34个字符\n"
+            "请重新输入"
+        )
+        return True
+    
+    # 获取代理信息
+    agent = agent_bots.find_one({'agent_bot_id': agent_bot_id})
+    if not agent:
+        update.message.reply_text("❌ 代理不存在")
+        context.user_data.pop(f'waiting_for_agent_address_{user_id}', None)
+        return True
+    
+    agent_name = agent.get('agent_name', '未知代理')
+    agent_token = agent.get('agent_token', '')
+    old_address = agent.get('wallet_address', '')
+    
+    # 显示确认界面
+    text = f"""
+💳 <b>确认修改地址</b>
+
+📋 代理商：{agent_name}
+🆔 代理ID：<code>{agent_bot_id}</code>
+
+🆕 <b>新地址：</b>
+<code>{address}</code>
+    """.strip()
+    
+    if old_address:
+        text += f"\n\n🔴 <b>旧地址：</b>\n<code>{old_address}</code>"
+    
+    text += "\n\n确认修改此地址吗？"
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("❌ 取消", callback_data=f"agent_config_address_{agent_bot_id}"),
+            InlineKeyboardButton("✅ 确认", callback_data=f"agent_confirm_address_{agent_bot_id}")
+        ]
+    ]
+    
+    # 保存地址到context
+    context.user_data[f'new_agent_address_{agent_bot_id}'] = address
+    
+    # 清除等待状态
+    context.user_data.pop(f'waiting_for_agent_address_{user_id}', None)
+    
+    update.message.reply_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return True
+
+
+def confirm_agent_address_change(update: Update, context: CallbackContext):
+    """确认代理地址修改"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    # 从callback_data中提取agent_bot_id
+    agent_bot_id = query.data.replace("agent_confirm_address_", "")
+    
+    # 获取新地址
+    new_address = context.user_data.get(f'new_agent_address_{agent_bot_id}')
+    
+    if not new_address:
+        query.answer("地址信息丢失，请重新操作", show_alert=True)
+        return
+    
+    # 获取代理信息
+    agent = agent_bots.find_one({'agent_bot_id': agent_bot_id})
+    if not agent:
+        query.edit_message_text("❌ 代理不存在")
+        return
+    
+    agent_name = agent.get('agent_name', '未知代理')
+    agent_token = agent.get('agent_token', '')
+    old_address = agent.get('wallet_address', '')
+    
+    try:
+        # 更新地址
+        bind_time = beijing_now_str()
+        agent_bots.update_one(
+            {'agent_bot_id': agent_bot_id},
+            {
+                '$set': {
+                    'wallet_address': new_address,
+                    'wallet_address_bind_time': bind_time,
+                    'wallet_address_update_by': user_id
+                }
+            }
+        )
+        
+        # 清除context中的临时数据
+        context.user_data.pop(f'new_agent_address_{agent_bot_id}', None)
+        
+        # 发送通知给代理商（如果有token）
+        # 注意：需要知道代理Bot的管理员用户ID才能发送通知
+        # 当前仅记录日志，未来可扩展实现
+        if agent_token:
+            logging.info(f"✅ 代理地址已变更: agent={agent_name}, new_address={new_address}")
+            # TODO: 实现向代理Bot管理员发送通知的功能
+            # 需要在agent_bots集合中添加owner_user_id字段来存储代理管理员的Telegram用户ID
+        
+        # 显示地址简写
+        address_display = f"{new_address[:6]}...{new_address[-4:]}"
+        
+        text = f"""
+✅ <b>地址设置成功</b>
+
+📋 代理商：{agent_name}
+💳 收款地址：<code>{address_display}</code>
+⏰ 设置时间：{bind_time}
+
+地址已成功保存
+        """.strip()
+        
+        keyboard = [
+            [InlineKeyboardButton("🔙 返回地址配置", callback_data=f"agent_config_address_{agent_bot_id}")],
+            [InlineKeyboardButton("❌ 关闭", callback_data=f"close {user_id}")]
+        ]
+        
+        query.edit_message_text(
+            text=text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        logging.info(f"✅ 管理员修改代理地址: admin={user_id}, agent={agent_name}, address={new_address}")
+        
+    except Exception as e:
+        logging.error(f"❌ 修改代理地址失败: {e}")
+        query.answer("系统错误，请稍后重试", show_alert=True)
+
+
 # ==================== 代理提现管理模块 ====================
 
 """
