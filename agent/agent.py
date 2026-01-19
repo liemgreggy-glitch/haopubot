@@ -3966,7 +3966,7 @@ def agent_sifa(update: Update, context: CallbackContext):
     if state == 1:
         status_text = '📢 <b>用户私信管理</b>\n\n📴 私发状态：<b>已关闭🔴</b>'
     else:
-        status_text = '📢 <b>用户私信管理</b>\n\n🟢 私发状态：<b>已开启🟢</b>'
+        status_text = '📢 <b>用户私信管理</b>\n\n🟢 私发状态：<b>进行中🟢</b>'
     
     # 发送消息
     query.edit_message_text(
@@ -4032,7 +4032,7 @@ def agent_cattu(update: Update, context: CallbackContext):
     file_type = fqdtw_list['send_type']
     key_text = fqdtw_list['key_text']
     keyboard = pickle.loads(fqdtw_list['keyboard'])
-    keyboard.append([InlineKeyboardButton('✅已读（点击销毁此消息）', callback_data=f'close {user_id}')])
+    # Preview uses the configured buttons without adding close button
     
     if fqdtw_list['text'] == '' and fqdtw_list['file_id'] == '':
         message_id = context.bot.send_message(chat_id=user_id, text='⚠️ 请先设置图文内容')
@@ -4116,9 +4116,9 @@ def agent_kaiqisifa(update: Update, context: CallbackContext):
     ]
     
     if new_state == 1:
-        status_text = '📢 <b>用户私信管理</b>\n\n📴 私发状态：<b>已关闭🔴</b>\n\n新用户将不会自动收到广告'
+        status_text = '📢 <b>用户私信管理</b>\n\n📴 私发状态：<b>已关闭🔴</b>'
     else:
-        status_text = '📢 <b>用户私信管理</b>\n\n🟢 私发状态：<b>已开启🟢</b>\n\n新用户 /start 时将自动收到广告'
+        status_text = '📢 <b>用户私信管理</b>\n\n🟢 私发状态：<b>已开启🟢</b>'
     
     query.edit_message_text(
         text=status_text,
@@ -4149,8 +4149,7 @@ def agent_fbgg(update: Update, context: CallbackContext):
     key_text = fqdtw_list['key_text']
     keyboard_data = fqdtw_list['keyboard']
     keyboard = pickle.loads(keyboard_data)
-    # Add close button (use generic callback data since it's for all users)
-    keyboard.append([InlineKeyboardButton('✅ 已读（点击销毁此消息）', callback_data='close_broadcast_msg')])
+    # Broadcast uses the configured buttons without adding close button
     markup = InlineKeyboardMarkup(keyboard)
     
     # 获取所有用户
