@@ -1209,7 +1209,8 @@ def handle_quantity_input(update: Update, context: CallbackContext):
             # 地址绑定流程
             handle_address_binding(update, context, text)
         else:
-            # 原有的提现确认流程（保留兼容性）
+            # 兼容旧版提现流程（已弃用，将在未来版本移除）
+            # TODO: 此代码路径在下一个主要版本中将被移除
             confirm_withdraw(update, context, text)
         return
     
@@ -3806,7 +3807,7 @@ def submit_withdraw(update: Update, context: CallbackContext):
     
     # 生成唯一提现单号（使用时间戳+随机后缀）
     withdrawal_id = f"W{datetime.now().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:4].upper()}"
-    apply_time = format_beijing_time(datetime.now())
+    apply_time = beijing_now_str()  # 使用统一的时间格式函数
     
     # 原子操作：检查余额并扣除
     result = agent_bots.find_one_and_update(
@@ -3856,7 +3857,7 @@ def submit_withdraw(update: Update, context: CallbackContext):
         return
     
     # 发送通知到 AGENT_ORDER_NOTIFY_GROUP
-    if AGENT_ORDER_NOTIFY_GROUP:
+    if AGENT_ORDER_NOTIFY_GROUP and AGENT_ORDER_NOTIFY_GROUP.strip():
         notify_text = f"""
 🔔 <b>新提现申请</b>
 
@@ -3869,12 +3870,15 @@ def submit_withdraw(update: Update, context: CallbackContext):
 📊 状态：待处理
         """.strip()
         try:
+            group_id = int(AGENT_ORDER_NOTIFY_GROUP)
             context.bot.send_message(
-                chat_id=int(AGENT_ORDER_NOTIFY_GROUP),
+                chat_id=group_id,
                 text=notify_text,
                 parse_mode='HTML'
             )
-            logging.info(f"✅ 提现通知已发送到群组: {AGENT_ORDER_NOTIFY_GROUP}")
+            logging.info(f"✅ 提现通知已发送到订单群")
+        except ValueError as e:
+            logging.error(f"❌ 订单群ID格式错误: {e}")
         except Exception as e:
             logging.error(f"❌ 发送提现通知失败: {e}")
     

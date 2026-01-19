@@ -851,49 +851,12 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
         context.user_data.pop(f'new_agent_address_{agent_bot_id}', None)
         
         # 发送通知给代理商（如果有token）
+        # 注意：需要知道代理Bot的管理员用户ID才能发送通知
+        # 当前仅记录日志，未来可扩展实现
         if agent_token:
-            try:
-                from telegram import Bot
-                agent_bot = Bot(token=agent_token)
-                
-                if old_address:
-                    notify_text = f"""
-🔔 <b>地址变更通知</b>
-
-您的收款地址已由管理员修改
-
-🔴 <b>旧地址：</b>
-<code>{old_address}</code>
-
-🆕 <b>新地址：</b>
-<code>{new_address}</code>
-
-⏰ 变更时间：{bind_time}
-
-如有疑问，请联系总部管理员
-                    """.strip()
-                else:
-                    notify_text = f"""
-🔔 <b>地址绑定通知</b>
-
-您的收款地址已由管理员设置
-
-💳 <b>收款地址：</b>
-<code>{new_address}</code>
-
-⏰ 设置时间：{bind_time}
-
-此地址将用于提现收款
-如有疑问，请联系总部管理员
-                    """.strip()
-                
-                # 尝试发送给所有管理员用户
-                # 这里假设代理Bot的管理员ID保存在环境变量中
-                # 暂时记录日志
-                logging.info(f"✅ 代理地址变更通知（需要代理管理员ID才能发送）: {agent_name}")
-                
-            except Exception as e:
-                logging.error(f"❌ 发送代理通知失败: {e}")
+            logging.info(f"✅ 代理地址已变更: agent={agent_name}, new_address={new_address}")
+            # TODO: 实现向代理Bot管理员发送通知的功能
+            # 需要在agent_bots集合中添加owner_user_id字段来存储代理管理员的Telegram用户ID
         
         # 显示地址简写
         address_display = f"{new_address[:6]}...{new_address[-4:]}"
