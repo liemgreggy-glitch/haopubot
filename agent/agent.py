@@ -4042,11 +4042,7 @@ def agent_cattu(update: Update, context: CallbackContext):
         except:
             pass
     else:
-        try:
-            if key_text:
-                context.bot.send_message(chat_id=user_id, text=key_text)
-        except:
-            pass
+        # Note: key_text is just stored for reference, not sent to users
         
         if file_type == 'text':
             try:
@@ -4181,12 +4177,7 @@ def agent_fbgg(update: Update, context: CallbackContext):
         try:
             uid = u['user_id']
             
-            # 发送关键文本（如果有）
-            if key_text:
-                try:
-                    context.bot.send_message(chat_id=uid, text=key_text)
-                except:
-                    pass
+            # Note: key_text is just stored for reference, not sent to users during broadcast
             
             # 发送主内容
             if file_type == 'text':
