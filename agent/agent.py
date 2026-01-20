@@ -1745,6 +1745,11 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                             os.makedirs(temp_tdata_dir, exist_ok=True)
                             
                             logging.debug(f"    🔄 转换Session到TData: {account['session']}")
+                            
+                            # 验证session文件存在
+                            if not os.path.exists(session_file):
+                                raise FileNotFoundError(f"Session文件不存在: {session_file}")
+                            
                             # 转换 session 到 tdata（离线转换）
                             # account['session'] 不包含 .session 后缀，SessionManager 需要不带后缀的路径
                             # SessionManager.from_telethon_file 是异步函数，需要在事件循环中运行
@@ -1752,9 +1757,14 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
                             try:
+                                logging.debug(f"    📥 加载Session文件: {account['session']}")
                                 session = loop.run_until_complete(SessionManager.from_telethon_file(account['session']))
+                                logging.debug(f"    ✅ Session加载成功，类型: {type(session)}")
+                                
                                 tdata_path = os.path.join(temp_tdata_dir, "tdata")
+                                logging.debug(f"    💾 转换到TData目录: {tdata_path}")
                                 session.to_tdata(tdata_path)
+                                logging.debug(f"    ✅ TData转换完成")
                             finally:
                                 loop.close()
                             
@@ -1775,7 +1785,10 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                                 logging.warning(f"清理临时 tdata 目录失败: {e}")
                             
                         except Exception as e:
-                            logging.error(f"    ❌ 转换 {phone} 到 TData 失败: {e}")
+                            import traceback
+                            error_details = traceback.format_exc()
+                            logging.error(f"    ❌ 转换 {phone} 到 TData 失败: {type(e).__name__}: {str(e)}")
+                            logging.debug(f"    详细错误信息:\n{error_details}")
                             logging.info(f"    🔄 回退到Session格式")
                             # 转换失败，回退到原始格式
                             if os.path.exists(json_file):
