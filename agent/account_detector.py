@@ -26,23 +26,58 @@ from telethon.errors import (
 )
 import json
 
-# 多语言关键词匹配
+# 多语言关键词匹配 - 4种状态：正常、封禁、冻结、未知
+# 正常账号 - 无限制
 NORMAL_KEYWORDS = [
-    'good news', 'no limits', 'no restrictions',
-    '好消息', '没有限制', '没有任何限制',
+    # 英文关键词
+    'good news, no limits are currently applied',
+    "you're free as a bird",
+    'no limits',
+    'free as a bird',
+    'no restrictions',
+    'all good',
+    'account is free',
+    'working fine',
+    'not limited',
+    # 中文关键词
+    '正常',
+    '没有限制',
+    '一切正常',
+    '无限制',
+    # 其他语言
     'хорошие новости', 'ограничений нет', 'нет ограничений',
     'خبر خوب', 'بدون محدودیت',
     'buenas noticias', 'sin límites',
     'bonne nouvelle', 'aucune limite',
 ]
 
+# 封禁账号 - 永久限制
 BANNED_KEYWORDS = [
-    'permanently limited', 'permanently restricted',
-    '永久限制', '永久受限',
+    # 永久限制的关键指标
+    'permanently banned',
+    'account has been frozen permanently',
+    'permanently restricted',
+    'account is permanently',
+    'banned permanently',
+    'permanent ban',
+    # 违规相关
+    'account was blocked for violations',
+    'telegram terms of service',
+    'blocked for violations',
+    'terms of service',
+    'violations of the telegram',
+    'banned',
+    'suspended',
+    # 中文关键词
+    '永久限制',
+    '永久封禁',
+    '永久受限',
+    # 其他语言
     'навсегда ограничен',
     'محدودیت دائمی',
 ]
 
+# 冻结账号 - 临时限制（不包含永久限制的词）
 FROZEN_KEYWORDS = [
     'limited', 'restricted', 'temporarily',
     '限制', '受限', '暂时',
@@ -50,6 +85,17 @@ FROZEN_KEYWORDS = [
     'محدود', 'موقت',
     'limitado', 'restringido',
     'limité', 'restreint',
+]
+
+# 等待验证状态
+PENDING_KEYWORDS = [
+    'wait',
+    'pending',
+    'verification',
+    # 中文关键词
+    '等待',
+    '审核中',
+    '验证'
 ]
 
 
@@ -298,19 +344,25 @@ class AccountDetector:
         多语言关键词匹配
         
         Returns:
-            'normal', 'banned', 'frozen'
+            'normal', 'banned', 'frozen', 'unknown'
         """
         text_lower = text.lower()
         
         logging.debug(f"🔍 开始关键词匹配，文本长度: {len(text_lower)}")
         
-        # 优先匹配封禁（永久限制）
+        # 优先匹配封禁（永久限制）- 包含banned和permanent关键词
         for keyword in BANNED_KEYWORDS:
             if keyword.lower() in text_lower:
                 logging.debug(f"❌ 匹配到封禁关键词: '{keyword}'")
                 return 'banned'
         
-        # 然后匹配冻结（临时限制）
+        # 然后匹配等待验证状态 - 作为未知处理
+        for keyword in PENDING_KEYWORDS:
+            if keyword.lower() in text_lower:
+                logging.debug(f"⏳ 匹配到等待验证关键词: '{keyword}'")
+                return 'unknown'
+        
+        # 然后匹配冻结（临时限制）- 不包含永久限制
         for keyword in FROZEN_KEYWORDS:
             if keyword.lower() in text_lower:
                 logging.debug(f"⚠️ 匹配到冻结关键词: '{keyword}'")
