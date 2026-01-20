@@ -1500,7 +1500,7 @@ def send_account_files(context: CallbackContext, user_id: int, nowuid: str, quan
 
 
 def send_account_files_with_detection(context: CallbackContext, user_id: int, nowuid: str, quantity: int, 
-                                       product_name: str, agent_price: float, order_id: str):
+                                       product_name: str, agent_price: float, order_id: str, username: str = 'unknown', fullname: str = 'unknown'):
     """
     打包并发送账号文件（带智能检测）
     
@@ -1699,37 +1699,76 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     if (banned_count > 0 or frozen_count > 0) and BAD_ACCOUNT_GROUP_ID:
         try:
             bad_accounts = results.get('banned', []) + results.get('frozen', [])
-            for account in bad_accounts:
-                session_file = account['session'] + '.session'
-                json_file = account['json']
-                
-                # 发送文件到坏号群
+            
+            # 创建坏号 zip 文件
+            timestamp = int(time.time())
+            bad_zip_path = f"./协议号发货/{user_id}_{timestamp}_bad.zip"
+            os.makedirs('./协议号发货', exist_ok=True)
+            
+            with zipfile.ZipFile(bad_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for account in bad_accounts:
+                    session_file = account['session'] + '.session'
+                    json_file = account['json']
+                    phone = account['phone']
+                    
+                    # 为每个账号创建文件夹
+                    folder_name = phone.replace('+', '')
+                    
+                    # 添加文件到对应文件夹
+                    if os.path.exists(json_file):
+                        zipf.write(json_file, f"{folder_name}/{os.path.basename(json_file)}")
+                    if os.path.exists(session_file):
+                        zipf.write(session_file, f"{folder_name}/{os.path.basename(session_file)}")
+            
+            # 发送坏号 zip 到群组
+            if os.path.exists(bad_zip_path):
                 try:
                     group_id = int(BAD_ACCOUNT_GROUP_ID)
-                    if os.path.exists(json_file):
-                        with open(json_file, 'rb') as f:
-                            context.bot.send_document(
-                                chat_id=group_id,
-                                document=f,
-                                caption=f"❌ 坏号: {account['phone']}\n状态: {'封禁' if account in results.get('banned', []) else '冻结'}\n订单: {order_id}"
-                            )
-                    if os.path.exists(session_file):
-                        with open(session_file, 'rb') as f:
-                            context.bot.send_document(
-                                chat_id=group_id,
-                                document=f
-                            )
+                    
+                    # 构建坏号报告消息
+                    banned_in_list = [acc for acc in bad_accounts if acc in results.get('banned', [])]
+                    frozen_in_list = [acc for acc in bad_accounts if acc in results.get('frozen', [])]
+                    
+                    caption = f"""⚠️ 坏号报告
+
+订单: {order_id}
+用户: @{username if username != 'unknown' else fullname}
+数量: {len(bad_accounts)} 个
+
+❌ 封禁: {len(banned_in_list)} 个
+⚠️ 冻结: {len(frozen_in_list)} 个"""
+                    
+                    with open(bad_zip_path, 'rb') as f:
+                        context.bot.send_document(
+                            chat_id=group_id,
+                            document=f,
+                            filename="坏号.zip",
+                            caption=caption
+                        )
+                    
+                    logging.info(f"✅ 已发送 {len(bad_accounts)} 个坏号到群组")
                 except Exception as e:
                     logging.error(f"发送坏号到群组失败: {e}")
                 
-                # 删除坏号文件
+                # 删除临时 zip 文件
                 try:
+                    os.remove(bad_zip_path)
+                except:
+                    pass
+            
+            # 删除坏号原始文件
+            for account in bad_accounts:
+                try:
+                    session_file = account['session'] + '.session'
+                    json_file = account['json']
+                    
                     if os.path.exists(json_file):
                         os.remove(json_file)
                     if os.path.exists(session_file):
                         os.remove(session_file)
                 except Exception as e:
                     logging.error(f"删除坏号文件失败: {e}")
+                    
         except Exception as e:
             logging.error(f"处理坏号失败: {e}")
     
@@ -1833,7 +1872,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     sold_account_ids = []
     
     for account in results.get('normal', []) + results.get('unknown', []):
-        sold_account_ids.append(account['db_id'])
+        sold_account_ids.append(account.get('db_id'))
     
     if sold_account_ids:
         hb.update_many(
@@ -1844,7 +1883,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     # 删除坏号数据库记录
     bad_account_ids = []
     for account in results.get('banned', []) + results.get('frozen', []):
-        bad_account_ids.append(account['db_id'])
+        bad_account_ids.append(account.get('db_id'))
     
     if bad_account_ids:
         hb.delete_many({"_id": {"$in": bad_account_ids}})
@@ -2031,7 +2070,7 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
         if fhtype == '协议号':
             # 使用带检测的发货功能
             success, refund_amount = send_account_files_with_detection(
-                context, user_id, nowuid, quantity, product_name, agent_price, order_id
+                context, user_id, nowuid, quantity, product_name, agent_price, order_id, username, fullname
             )
             
             if not success:

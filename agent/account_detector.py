@@ -332,23 +332,33 @@ class BatchDetector:
                     status, message = future.result()
                     
                     # 添加到对应结果列表
-                    results[status].append({
+                    result_item = {
                         'phone': account['phone'],
                         'session': account['session'],
                         'json': account['json'],
                         'message': message
-                    })
+                    }
+                    # 保留 db_id 如果存在
+                    if 'db_id' in account:
+                        result_item['db_id'] = account['db_id']
+                    
+                    results[status].append(result_item)
                     
                     logging.info(f"[{current}/{total}] {account['phone']}: {status}")
                     
                 except Exception as e:
                     logging.error(f"检测失败 {account['phone']}: {e}")
-                    results['unknown'].append({
+                    result_item = {
                         'phone': account['phone'],
                         'session': account['session'],
                         'json': account['json'],
                         'message': str(e)
-                    })
+                    }
+                    # 保留 db_id 如果存在
+                    if 'db_id' in account:
+                        result_item['db_id'] = account['db_id']
+                    
+                    results['unknown'].append(result_item)
                 
                 # 进度回调
                 if progress_callback:
@@ -356,9 +366,6 @@ class BatchDetector:
                         progress_callback(current, total, results)
                     except Exception as e:
                         logging.error(f"进度回调失败: {e}")
-                
-                # 检测间隔
-                time.sleep(5)
         
         return results
     
