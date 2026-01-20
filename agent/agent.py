@@ -1597,6 +1597,8 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         })
     
     # 发送检测开始消息
+    logging.info(f"🔍 开始账号质量检测: 用户={user_id}, 数量={quantity}")
+    
     if lang == 'zh':
         progress_text = """🔍 正在检测账号质量... 
 
@@ -1683,10 +1685,12 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     
     # 执行批量检测
     try:
+        logging.info(f"🚀 启动批量检测器: max_workers=30")
         detector = BatchDetector(API_ID, API_HASH, max_workers=30)
         results = detector.detect_accounts(detection_accounts, progress_callback=update_progress)
+        logging.info(f"✅ 批量检测完成")
     except Exception as e:
-        logging.error(f"账号检测失败: {e}")
+        logging.error(f"❌ 账号检测失败: {e}")
         # 检测失败，回退到普通发货
         try:
             context.bot.delete_message(chat_id=user_id, message_id=progress_msg.message_id)
@@ -1700,24 +1704,36 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     frozen_count = len(results.get('frozen', []))
     unknown_count = len(results.get('unknown', []))
     
+    logging.info(f"📊 检测结果统计:")
+    logging.info(f"   ✅ 正常: {normal_count}")
+    logging.info(f"   ❌ 封禁: {banned_count}")
+    logging.info(f"   ⚠️ 冻结: {frozen_count}")
+    logging.info(f"   ❓ 未知: {unknown_count}")
+    
     # 计算退款金额
     refund_count = banned_count + frozen_count
     refund_amount = refund_count * agent_price
     
+    logging.info(f"💰 退款计算: {refund_count} 个坏号 × {agent_price:.2f} = {refund_amount:.2f} USDT")
+    
     # 创建正常账号zip
     normal_zip_path = None
     if normal_count > 0:
+        logging.info(f"📦 开始打包 {normal_count} 个正常账号 (格式: {delivery_format})")
         timestamp = int(time.time())
         normal_zip_path = f"./协议号发货/{user_id}_{timestamp}_normal.zip"
         os.makedirs('./协议号发货', exist_ok=True)
         
         if delivery_format == 'tdata' and TGCONVERTOR_AVAILABLE:
+            logging.info(f"🔄 使用TData格式转换")
             # TData 格式：转换 session 到 tdata
             with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-                for account in results['normal']:
+                for idx, account in enumerate(results['normal'], 1):
                     session_file = account['session'] + '.session'
                     json_file = account['json']
                     phone = account['phone']
+                    
+                    logging.info(f"  [{idx}/{normal_count}] 转换 {phone} 到 TData...")
                     
                     if os.path.exists(session_file):
                         try:
@@ -1728,18 +1744,22 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                             temp_tdata_dir = f"./协议号发货/temp_tdata_{user_id}_{timestamp}_{folder_name}"
                             os.makedirs(temp_tdata_dir, exist_ok=True)
                             
+                            logging.debug(f"    🔄 转换Session到TData: {account['session']}")
                             # 转换 session 到 tdata（离线转换）
                             # account['session'] 不包含 .session 后缀，SessionManager 需要不带后缀的路径
                             session = SessionManager.from_telethon_file(account['session'])
                             tdata_path = os.path.join(temp_tdata_dir, "tdata")
                             session.to_tdata(tdata_path)
                             
+                            logging.debug(f"    📦 打包TData到ZIP: {folder_name}/")
                             # 将 tdata 文件夹添加到 zip
                             for root, dirs, files in os.walk(tdata_path):
                                 for file in files:
                                     file_path = os.path.join(root, file)
                                     arcname = os.path.join(folder_name, os.path.relpath(file_path, tdata_path))
                                     zipf.write(file_path, arcname)
+                            
+                            logging.info(f"    ✅ {phone} TData转换成功")
                             
                             # 清理临时文件
                             try:
@@ -1748,7 +1768,8 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                                 logging.warning(f"清理临时 tdata 目录失败: {e}")
                             
                         except Exception as e:
-                            logging.error(f"转换 {phone} 到 TData 失败: {e}")
+                            logging.error(f"    ❌ 转换 {phone} 到 TData 失败: {e}")
+                            logging.info(f"    🔄 回退到Session格式")
                             # 转换失败，回退到原始格式
                             if os.path.exists(json_file):
                                 zipf.write(json_file, os.path.basename(json_file))
@@ -1757,23 +1778,31 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         else:
             # Session 格式（默认）或 TGConvertor 不可用时回退
             if delivery_format == 'tdata' and not TGCONVERTOR_AVAILABLE:
-                logging.warning("TGConvertor 未安装，回退到 Session 格式")
+                logging.warning("⚠️ TGConvertor 未安装，回退到 Session 格式")
+            else:
+                logging.info(f"📦 使用Session + JSON格式")
             
             with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
                 pack_accounts_to_session_zip(zipf, results['normal'])
+        
+        logging.info(f"✅ 正常账号打包完成: {normal_zip_path}")
     
     # 创建未知错误账号zip
     unknown_zip_path = None
     if unknown_count > 0:
+        logging.info(f"📦 开始打包 {unknown_count} 个未知错误账号")
         timestamp = int(time.time())
         unknown_zip_path = f"./协议号发货/{user_id}_{timestamp}_unknown.zip"
         os.makedirs('./协议号发货', exist_ok=True)
         
         with zipfile.ZipFile(unknown_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             pack_accounts_to_session_zip(zipf, results['unknown'])
+        
+        logging.info(f"✅ 未知错误账号打包完成: {unknown_zip_path}")
     
     # 发送坏号到群组并删除
     if (banned_count > 0 or frozen_count > 0) and BAD_ACCOUNT_GROUP_ID:
+        logging.info(f"📮 开始处理 {banned_count + frozen_count} 个坏号")
         try:
             bad_accounts = results.get('banned', []) + results.get('frozen', [])
             
@@ -1827,7 +1856,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                     
                     logging.info(f"✅ 已发送 {len(bad_accounts)} 个坏号到群组")
                 except Exception as e:
-                    logging.error(f"发送坏号到群组失败: {e}")
+                    logging.error(f"❌ 发送坏号到群组失败: {e}")
                 
                 # 删除临时 zip 文件
                 try:
@@ -1836,6 +1865,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                     pass
             
             # 删除坏号原始文件
+            logging.info(f"🗑️ 删除 {len(bad_accounts)} 个坏号的原始文件")
             for account in bad_accounts:
                 try:
                     session_file = account['session'] + '.session'
@@ -1861,6 +1891,15 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     format_display = "Session + JSON" if delivery_format == "session" else "TData (桌面版)"
     format_display_en = "Session + JSON" if delivery_format == "session" else "TData (Desktop)"
     
+    # 获取用户最新余额（检测后可能有退款）
+    updated_agent_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
+    current_balance = updated_agent_user.get('USDT', 0) if updated_agent_user else 0
+    
+    logging.info(f"📊 购买结果汇总:")
+    logging.info(f"   💰 实付: {normal_count * agent_price:.2f} USDT (正常账号)")
+    logging.info(f"   💵 退回: {refund_amount:.2f} USDT (坏号)")
+    logging.info(f"   📦 剩余余额: {current_balance:.2f} USDT")
+    
     if lang == 'zh':
         result_text = f"""🛒 购买成功！
 
@@ -1877,9 +1916,10 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 
 💰 实付: {normal_count * agent_price:.2f} USDT
 {'💵 退回: ' + f'{refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
+📦 剩余余额: {current_balance:.2f} USDT
 
 📁 发货格式: {format_display}
-{'📥 正常账号已发送 ↓' if normal_count > 0 else ''}"""
+{'📥 正常账号已发送 ↓' if normal_count > 0 else ''}""""""
         
         if unknown_count > 0:
             result_text += f"""
@@ -1906,9 +1946,10 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 
 💰 Paid: {normal_count * agent_price:.2f} USDT
 {'💵 Refund: ' + f'{refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
+📦 Remaining Balance: {current_balance:.2f} USDT
 
 📁 Delivery Format: {format_display_en}
-{'📥 Normal accounts sent ↓' if normal_count > 0 else ''}"""
+{'📥 Normal accounts sent ↓' if normal_count > 0 else ''}""""""
         
         if unknown_count > 0:
             result_text += f"""
@@ -1966,6 +2007,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
             sold_account_ids.append(db_id)
     
     if sold_account_ids:
+        logging.info(f"📝 标记 {len(sold_account_ids)} 个账号为已售出 (state=1)")
         hb.update_many(
             {"_id": {"$in": sold_account_ids}},
             {"$set": {'state': 1, 'yssj': timer, 'gmid': user_id}}
@@ -1979,6 +2021,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
             bad_account_ids.append(db_id)
     
     if bad_account_ids:
+        logging.info(f"🗑️ 从数据库删除 {len(bad_account_ids)} 个坏号记录")
         hb.delete_many({"_id": {"$in": bad_account_ids}})
     
     return True, refund_amount
