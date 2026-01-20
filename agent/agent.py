@@ -2084,14 +2084,16 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
                 )
                 
                 # 调整代理统计
-                refund_profit = refund_amount - (refund_amount / (1 + COMMISSION_RATE) * COMMISSION_RATE)
+                # 计算需要退回的佣金：退款金额对应的佣金部分
+                hq_refund = refund_amount / (1 + COMMISSION_RATE)  # 总部成本部分
+                refund_commission = refund_amount - hq_refund  # 佣金部分
                 agent_bots.update_one(
                     {'agent_bot_id': AGENT_BOT_ID},
                     {
                         '$inc': {
                             'total_sales': -refund_amount,
-                            'total_commission': -refund_profit,
-                            'available_balance': -refund_profit
+                            'total_commission': -refund_commission,
+                            'available_balance': -refund_commission
                         }
                     }
                 )

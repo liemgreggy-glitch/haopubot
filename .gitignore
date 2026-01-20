@@ -53,3 +53,6 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Account delivery files
+协议号发货/
