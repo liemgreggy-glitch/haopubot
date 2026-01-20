@@ -81,6 +81,14 @@ try:
 except ImportError as e:
     logging.warning(f"⚠️ 支付系统导入失败: {e}")
     PAYMENT_SYSTEM_AVAILABLE = False
+
+# 导入账号检测系统
+try:
+    from account_detector import BatchDetector
+    ACCOUNT_DETECTOR_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"⚠️ 账号检测系统导入失败: {e}")
+    ACCOUNT_DETECTOR_AVAILABLE = False
 # ===================== 从 .env 读取代理配置 =====================
 # 全局变量
 AGENT_BOT_ID = os.getenv('AGENT_BOT_ID', '')
@@ -111,6 +119,12 @@ AGENT_ORDER_NOTIFY_GROUP = os.getenv('AGENT_ORDER_NOTIFY_GROUP', '')
 # 文件路径配置
 BASE_PROTOCOL_PATH = os.getenv('BASE_PROTOCOL_PATH', '/www/haopubot/haopu-main/协议号')
 FALLBACK_PROTOCOL_PATH = os.getenv('FALLBACK_PROTOCOL_PATH', './协议号')
+
+# 账号检测配置
+API_ID = int(os.getenv('API_ID', '0'))
+API_HASH = os.getenv('API_HASH', '')
+BAD_ACCOUNT_GROUP_ID = os.getenv('BAD_ACCOUNT_GROUP_ID', '')
+ENABLE_ACCOUNT_DETECTION = os.getenv('ENABLE_ACCOUNT_DETECTION', 'true').lower() == 'true'
 
 # 日志配置
 os.makedirs('logs', exist_ok=True)
@@ -1485,6 +1499,359 @@ def send_account_files(context: CallbackContext, user_id: int, nowuid: str, quan
         return False
 
 
+def send_account_files_with_detection(context: CallbackContext, user_id: int, nowuid: str, quantity: int, 
+                                       product_name: str, agent_price: float, order_id: str):
+    """
+    打包并发送账号文件（带智能检测）
+    
+    Returns:
+        (success, refund_amount)
+    """
+    # 获取用户语言
+    lang = get_user_lang(user_id)
+    
+    # 检查是否启用检测
+    if not ENABLE_ACCOUNT_DETECTION or not ACCOUNT_DETECTOR_AVAILABLE or not API_ID or not API_HASH:
+        logging.warning("账号检测未启用或配置不完整，使用普通发货")
+        return send_account_files(context, user_id, nowuid, quantity), 0.0
+    
+    # 从数据库获取指定数量的账号
+    query_condition = {"nowuid": nowuid, "state": 0}
+    pipeline = [
+        {"$match": query_condition},
+        {"$limit": quantity}
+    ]
+    
+    cursor = hb.aggregate(pipeline)
+    accounts = list(cursor)
+    
+    if len(accounts) < quantity:
+        logging.error(f"库存不足: 需要{quantity}个，实际只有{len(accounts)}个")
+        msg = "❌ Out of stock, purchase failed" if lang != 'zh' else "❌ 库存不足，购买失败"
+        context.bot.send_message(chat_id=user_id, text=msg)
+        return False, 0.0
+    
+    # 准备检测账号列表
+    detection_accounts = []
+    for account in accounts:
+        file_name = account['projectname']
+        
+        # 查找session和json文件
+        json_file = os.path.join(BASE_PROTOCOL_PATH, nowuid, file_name + ".json")
+        session_file = os.path.join(BASE_PROTOCOL_PATH, nowuid, file_name + ".session")
+        
+        # 如果总部路径不存在，尝试本地路径
+        if not os.path.exists(json_file):
+            json_file = os.path.join(FALLBACK_PROTOCOL_PATH, nowuid, file_name + ".json")
+        if not os.path.exists(session_file):
+            session_file = os.path.join(FALLBACK_PROTOCOL_PATH, nowuid, file_name + ".session")
+        
+        detection_accounts.append({
+            'phone': file_name,
+            'session': session_file.replace('.session', ''),  # Telethon不需要.session后缀
+            'json': json_file,
+            'db_id': account['_id']
+        })
+    
+    # 发送检测开始消息
+    if lang == 'zh':
+        progress_text = """🔍 正在检测账号质量... 
+
+━━━━━━━━━━━━━━━━━━━━
+📊 检测进度: 0/{total}
+
+✅ 正常: 0
+❌ 封禁: 0
+⚠️ 冻结: 0
+❓ 未知: 0
+
+⏳ 检测中...
+━━━━━━━━━━━━━━━━━━━━""".format(total=quantity)
+    else:
+        progress_text = """🔍 Checking account quality... 
+
+━━━━━━━━━━━━━━━━━━━━
+📊 Progress: 0/{total}
+
+✅ Normal: 0
+❌ Banned: 0
+⚠️ Frozen: 0
+❓ Unknown: 0
+
+⏳ Checking...
+━━━━━━━━━━━━━━━━━━━━""".format(total=quantity)
+    
+    progress_msg = context.bot.send_message(
+        chat_id=user_id,
+        text=progress_text
+    )
+    
+    # 进度回调函数
+    def update_progress(current, total, results):
+        try:
+            if lang == 'zh':
+                updated_text = """🔍 正在检测账号质量... 
+
+━━━━━━━━━━━━━━━━━━━━
+📊 检测进度: {current}/{total}
+
+✅ 正常: {normal}
+❌ 封禁: {banned}
+⚠️ 冻结: {frozen}
+❓ 未知: {unknown}
+
+⏳ 检测中...
+━━━━━━━━━━━━━━━━━━━━""".format(
+                    current=current,
+                    total=total,
+                    normal=len(results.get('normal', [])),
+                    banned=len(results.get('banned', [])),
+                    frozen=len(results.get('frozen', [])),
+                    unknown=len(results.get('unknown', []))
+                )
+            else:
+                updated_text = """🔍 Checking account quality... 
+
+━━━━━━━━━━━━━━━━━━━━
+📊 Progress: {current}/{total}
+
+✅ Normal: {normal}
+❌ Banned: {banned}
+⚠️ Frozen: {frozen}
+❓ Unknown: {unknown}
+
+⏳ Checking...
+━━━━━━━━━━━━━━━━━━━━""".format(
+                    current=current,
+                    total=total,
+                    normal=len(results.get('normal', [])),
+                    banned=len(results.get('banned', [])),
+                    frozen=len(results.get('frozen', [])),
+                    unknown=len(results.get('unknown', []))
+                )
+            
+            context.bot.edit_message_text(
+                chat_id=user_id,
+                message_id=progress_msg.message_id,
+                text=updated_text
+            )
+        except Exception as e:
+            logging.error(f"更新进度失败: {e}")
+    
+    # 执行批量检测
+    try:
+        detector = BatchDetector(API_ID, API_HASH, max_workers=30)
+        results = detector.detect_accounts(detection_accounts, progress_callback=update_progress)
+    except Exception as e:
+        logging.error(f"账号检测失败: {e}")
+        # 检测失败，回退到普通发货
+        try:
+            context.bot.delete_message(chat_id=user_id, message_id=progress_msg.message_id)
+        except:
+            pass
+        return send_account_files(context, user_id, nowuid, quantity), 0.0
+    
+    # 处理检测结果
+    normal_count = len(results.get('normal', []))
+    banned_count = len(results.get('banned', []))
+    frozen_count = len(results.get('frozen', []))
+    unknown_count = len(results.get('unknown', []))
+    
+    # 计算退款金额
+    refund_count = banned_count + frozen_count
+    refund_amount = refund_count * agent_price
+    
+    # 创建正常账号zip
+    normal_zip_path = None
+    if normal_count > 0:
+        timestamp = int(time.time())
+        normal_zip_path = f"./协议号发货/{user_id}_{timestamp}_normal.zip"
+        os.makedirs('./协议号发货', exist_ok=True)
+        
+        with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for account in results['normal']:
+                session_file = account['session'] + '.session'
+                json_file = account['json']
+                
+                if os.path.exists(json_file):
+                    zipf.write(json_file, os.path.basename(json_file))
+                if os.path.exists(session_file):
+                    zipf.write(session_file, os.path.basename(session_file))
+    
+    # 创建未知错误账号zip
+    unknown_zip_path = None
+    if unknown_count > 0:
+        timestamp = int(time.time())
+        unknown_zip_path = f"./协议号发货/{user_id}_{timestamp}_unknown.zip"
+        os.makedirs('./协议号发货', exist_ok=True)
+        
+        with zipfile.ZipFile(unknown_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for account in results['unknown']:
+                session_file = account['session'] + '.session'
+                json_file = account['json']
+                
+                if os.path.exists(json_file):
+                    zipf.write(json_file, os.path.basename(json_file))
+                if os.path.exists(session_file):
+                    zipf.write(session_file, os.path.basename(session_file))
+    
+    # 发送坏号到群组并删除
+    if (banned_count > 0 or frozen_count > 0) and BAD_ACCOUNT_GROUP_ID:
+        try:
+            bad_accounts = results.get('banned', []) + results.get('frozen', [])
+            for account in bad_accounts:
+                session_file = account['session'] + '.session'
+                json_file = account['json']
+                
+                # 发送文件到坏号群
+                try:
+                    group_id = int(BAD_ACCOUNT_GROUP_ID)
+                    if os.path.exists(json_file):
+                        with open(json_file, 'rb') as f:
+                            context.bot.send_document(
+                                chat_id=group_id,
+                                document=f,
+                                caption=f"❌ 坏号: {account['phone']}\n状态: {'封禁' if account in results.get('banned', []) else '冻结'}\n订单: {order_id}"
+                            )
+                    if os.path.exists(session_file):
+                        with open(session_file, 'rb') as f:
+                            context.bot.send_document(
+                                chat_id=group_id,
+                                document=f
+                            )
+                except Exception as e:
+                    logging.error(f"发送坏号到群组失败: {e}")
+                
+                # 删除坏号文件
+                try:
+                    if os.path.exists(json_file):
+                        os.remove(json_file)
+                    if os.path.exists(session_file):
+                        os.remove(session_file)
+                except Exception as e:
+                    logging.error(f"删除坏号文件失败: {e}")
+        except Exception as e:
+            logging.error(f"处理坏号失败: {e}")
+    
+    # 删除进度消息
+    try:
+        context.bot.delete_message(chat_id=user_id, message_id=progress_msg.message_id)
+    except:
+        pass
+    
+    # 发送检测结果消息
+    if lang == 'zh':
+        result_text = f"""🛒 购买成功！
+
+━━━━━━━━━━━━━━━━━━━━
+📦 商品: {product_name}
+💰 单价: {agent_price:.2f} USDT
+📊 购买数量: {quantity} 个
+━━━━━━━━━━━━━━━━━━━━
+
+🔍 检测结果: 
+✅ 正常: {normal_count} 个
+❌ 封禁: {banned_count} 个
+⚠️ 冻结: {frozen_count} 个
+
+💰 实付: {normal_count * agent_price:.2f} USDT
+{'💵 退回: ' + f'{refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
+
+{'📁 正常账号已发送 ↓' if normal_count > 0 else ''}"""
+        
+        if unknown_count > 0:
+            result_text += f"""
+
+━━━━━━━━━━━━━━━━━━━━
+⚠️ 以下账号检测异常，请联系客服处理: 
+
+❓ 未知错误: {unknown_count} 个"""
+        
+        result_text += "\n━━━━━━━━━━━━━━━━━━━━"
+    else:
+        result_text = f"""🛒 Purchase Successful！
+
+━━━━━━━━━━━━━━━━━━━━
+📦 Product: {product_name}
+💰 Price: {agent_price:.2f} USDT
+📊 Quantity: {quantity} pcs
+━━━━━━━━━━━━━━━━━━━━
+
+🔍 Detection Result: 
+✅ Normal: {normal_count} pcs
+❌ Banned: {banned_count} pcs
+⚠️ Frozen: {frozen_count} pcs
+
+💰 Paid: {normal_count * agent_price:.2f} USDT
+{'💵 Refund: ' + f'{refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
+
+{'📁 Normal accounts sent ↓' if normal_count > 0 else ''}"""
+        
+        if unknown_count > 0:
+            result_text += f"""
+
+━━━━━━━━━━━━━━━━━━━━
+⚠️ Following accounts have detection errors, please contact support: 
+
+❓ Unknown Error: {unknown_count} pcs"""
+        
+        result_text += "\n━━━━━━━━━━━━━━━━━━━━"
+    
+    context.bot.send_message(
+        chat_id=user_id,
+        text=result_text
+    )
+    
+    # 发送正常账号zip
+    if normal_zip_path and os.path.exists(normal_zip_path):
+        with open(normal_zip_path, 'rb') as f:
+            context.bot.send_document(
+                chat_id=user_id,
+                document=f,
+                filename="正常账号.zip" if lang == 'zh' else "normal_accounts.zip"
+            )
+        try:
+            os.remove(normal_zip_path)
+        except:
+            pass
+    
+    # 发送未知错误账号zip
+    if unknown_zip_path and os.path.exists(unknown_zip_path):
+        with open(unknown_zip_path, 'rb') as f:
+            context.bot.send_document(
+                chat_id=user_id,
+                document=f,
+                filename="未知错误账号.zip" if lang == 'zh' else "unknown_error_accounts.zip"
+            )
+        try:
+            os.remove(unknown_zip_path)
+        except:
+            pass
+    
+    # 标记正常和未知错误账号为已售出
+    timer = beijing_now_str()
+    sold_account_ids = []
+    
+    for account in results.get('normal', []) + results.get('unknown', []):
+        sold_account_ids.append(account['db_id'])
+    
+    if sold_account_ids:
+        hb.update_many(
+            {"_id": {"$in": sold_account_ids}},
+            {"$set": {'state': 1, 'yssj': timer, 'gmid': user_id}}
+        )
+    
+    # 删除坏号数据库记录
+    bad_account_ids = []
+    for account in results.get('banned', []) + results.get('frozen', []):
+        bad_account_ids.append(account['db_id'])
+    
+    if bad_account_ids:
+        hb.delete_many({"_id": {"$in": bad_account_ids}})
+    
+    return True, refund_amount
+
+
 def confirm_buy_product(update: Update, context:  CallbackContext):
     """确认购买商品（执行购买）"""
     query = update.callback_query
@@ -1662,8 +2029,13 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
         
         # 根据商品类型发送账号
         if fhtype == '协议号':
-            success = send_account_files(context, user_id, nowuid, quantity)
+            # 使用带检测的发货功能
+            success, refund_amount = send_account_files_with_detection(
+                context, user_id, nowuid, quantity, product_name, agent_price, order_id
+            )
+            
             if not success:
+                # 发货失败，全额退款
                 agent_users.update_one(
                     {'user_id': user_id},
                     {
@@ -1678,7 +2050,55 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
                     {'order_id': order_id},
                     {'$set': {'status': 'failed', 'error': '发货失败，已退款'}}
                 )
+                # 回退代理统计
+                agent_bots.update_one(
+                    {'agent_bot_id': AGENT_BOT_ID},
+                    {
+                        '$inc': {
+                            'total_sales': -total_price,
+                            'total_commission': -profit,
+                            'available_balance': -profit,
+                            'total_orders': -1
+                        }
+                    }
+                )
                 return
+            
+            # 处理退款（如果有坏号）
+            if refund_amount > 0:
+                # 退款给用户
+                agent_users.update_one(
+                    {'user_id': user_id},
+                    {'$inc': {'USDT': refund_amount, 'zgje': -refund_amount}}
+                )
+                
+                # 更新订单记录
+                agent_orders.update_one(
+                    {'order_id': order_id},
+                    {
+                        '$set': {
+                            'refund_amount': refund_amount,
+                            'final_price': total_price - refund_amount
+                        }
+                    }
+                )
+                
+                # 调整代理统计
+                # 计算需要退回的佣金：退款金额对应的佣金部分
+                hq_refund = refund_amount / (1 + COMMISSION_RATE)  # 总部成本部分
+                refund_commission = refund_amount - hq_refund  # 佣金部分
+                agent_bots.update_one(
+                    {'agent_bot_id': AGENT_BOT_ID},
+                    {
+                        '$inc': {
+                            'total_sales': -refund_amount,
+                            'total_commission': -refund_commission,
+                            'available_balance': -refund_commission
+                        }
+                    }
+                )
+                
+                logging.info(f"✅ 退款处理完成: user={user_id}, refund={refund_amount:.2f}")
         else:
             accounts = list(hb.find({"nowuid": nowuid, 'state': 0}).limit(quantity))
             

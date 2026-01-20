@@ -1,0 +1,24 @@
+# Proxy configuration file
+# 代理配置文件
+#
+# Supported formats:
+# 支持的格式:
+#
+# 1. socks5://127.0.0.1:1080
+# 2. socks5://user:pass@127.0.0.1:1080
+# 3. socks4://127.0.0.1:1080
+# 4. http://127.0.0.1:8080
+# 5. http://user:pass@127.0.0.1:8080
+# 6. 127.0.0.1:1080
+# 7. 127.0.0.1:1080:user:pass
+#
+# Lines starting with # are comments
+# 以#开头的行是注释
+#
+# Add your proxies below (one per line):
+# 在下方添加您的代理（每行一个）:
+
+# Example / 示例:
+# socks5://127.0.0.1:1080
+# socks5://user:pass@proxy.example.com:1080
+# http://127.0.0.1:8080

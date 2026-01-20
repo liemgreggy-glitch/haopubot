@@ -37,6 +37,10 @@ env/
 .env.*
 !.env.example
 
+# Proxy configuration
+proxy.txt
+!proxy.txt.example
+
 # Logs
 logs/
 *.log
@@ -49,3 +53,6 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Account delivery files
+协议号发货/
