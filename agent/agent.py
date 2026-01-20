@@ -1919,7 +1919,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 📦 剩余余额: {current_balance:.2f} USDT
 
 📁 发货格式: {format_display}
-{'📥 正常账号已发送 ↓' if normal_count > 0 else ''}""""""
+{'📥 正常账号已发送 ↓' if normal_count > 0 else ''}"""
         
         if unknown_count > 0:
             result_text += f"""
@@ -1949,7 +1949,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 📦 Remaining Balance: {current_balance:.2f} USDT
 
 📁 Delivery Format: {format_display_en}
-{'📥 Normal accounts sent ↓' if normal_count > 0 else ''}""""""
+{'📥 Normal accounts sent ↓' if normal_count > 0 else ''}"""
         
         if unknown_count > 0:
             result_text += f"""

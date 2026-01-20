@@ -434,7 +434,6 @@ class BatchDetector:
                         logging.error(f"进度回调失败: {e}")
         
         # 输出最终统计
-        logging.info(f"")
         logging.info(f"{'='*60}")
         logging.info(f"📊 批量检测完成！总计: {total} 个账号")
         logging.info(f"✅ 正常: {len(results['normal'])} 个")
@@ -442,7 +441,6 @@ class BatchDetector:
         logging.info(f"⚠️ 冻结: {len(results['frozen'])} 个")
         logging.info(f"❓ 未知: {len(results['unknown'])} 个")
         logging.info(f"{'='*60}")
-        logging.info(f"")
         
         return results
     
