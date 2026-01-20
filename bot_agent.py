@@ -5,7 +5,7 @@
 
 import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import CallbackContext
 from mongo import (
     agent_bots,
@@ -1916,7 +1916,10 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
             agent = agent_bots.find_one({'agent_bot_id': agent_id})
             if agent:
                 owner_id = agent.get('owner_id')
-                if owner_id: 
+                agent_token = agent.get('agent_token')
+                if owner_id and agent_token:
+                    # 使用代理机器人发送通知给代理商
+                    agent_bot = Bot(token=agent_token)
                     notify_text = f"""
 🔔 <b>地址变更通知</b>
 
@@ -1925,7 +1928,8 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
 
 如有疑问请联系管理员。
 """
-                    context.bot.send_message(chat_id=owner_id, text=notify_text, parse_mode='HTML')
+                    agent_bot.send_message(chat_id=owner_id, text=notify_text, parse_mode='HTML')
+                    logging.info(f"✅ 已通过代理机器人通知代理商：owner_id={owner_id}")
         except Exception as e:
             logging.error(f"通知代理商失败:  {e}")
     else:
