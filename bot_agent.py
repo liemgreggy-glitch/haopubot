@@ -5,10 +5,11 @@
 
 import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import CallbackContext
 from mongo import (
-    agent_bots, 
+    agent_bots,
+    user,
     get_agent_stats,
     generate_agent_bot_id,
     sync_all_products_to_agent,
@@ -1751,14 +1752,9 @@ def handle_set_agent_wallet(update: Update, context: CallbackContext, user_id: i
 
 
 def show_agent_address_config(update: Update, context: CallbackContext):
-    """显示代理商地址配置（别名函数）"""
-    return agent_wallet_config(update, context)
-
-
-def show_agent_address_config(update: Update, context: CallbackContext):
     """显示代理商地址配置"""
     query = update.callback_query
-    query. answer()
+    query.answer()
     
     # 从 callback_data 获取代理商ID
     agent_id = query.data.replace('agent_address_config_', '').replace('agent_wallet_config_', '')
@@ -1769,7 +1765,7 @@ def show_agent_address_config(update: Update, context: CallbackContext):
         query.edit_message_text("❌ 代理商不存在")
         return
     
-    wallet_address = agent. get('wallet_address', '')
+    wallet_address = agent.get('wallet_address', '')
     
     text = f"""
 💳 <b>地址配置</b>
@@ -1799,15 +1795,15 @@ def request_agent_address_input(update: Update, context: CallbackContext):
     agent_id = query.data.replace('request_agent_address_', '')
     
     # 获取代理商信息
-    agent = agent_bots.find_one({'agent_bot_id':  agent_id})
+    agent = agent_bots.find_one({'agent_bot_id': agent_id})
     if not agent:
         query.edit_message_text("❌ 代理商不存在")
         return
     
     # 设置管理员输入状态
-    user. update_one(
+    user.update_one(
         {'user_id': user_id},
-        {'$set': {'sign':  f'set_agent_wallet_{agent_id}'}}
+        {'$set': {'sign': f'set_agent_wallet_{agent_id}'}}
     )
     
     text = f"""
@@ -1829,13 +1825,13 @@ def request_agent_address_input(update: Update, context: CallbackContext):
 
 def handle_agent_address_input(update: Update, context: CallbackContext, user_id: int, sign: str):
     """处理管理员输入的代理商地址"""
-    text = update.message.text. strip()
+    text = update.message.text.strip()
     
     # 获取代理商ID
-    agent_id = sign. replace('set_agent_wallet_', '')
+    agent_id = sign.replace('set_agent_wallet_', '')
     
     if text == '/cancel':
-        user. update_one({'user_id':  user_id}, {'$set':  {'sign': ''}})
+        user.update_one({'user_id': user_id}, {'$set': {'sign': ''}})
         keyboard = [[InlineKeyboardButton("🔙 返回", callback_data=f"agent_address_config_{agent_id}")]]
         update.message.reply_text("❌ 已取消", reply_markup=InlineKeyboardMarkup(keyboard))
         return True
@@ -1853,7 +1849,7 @@ def handle_agent_address_input(update: Update, context: CallbackContext, user_id
     user.update_one({'user_id': user_id}, {'$set': {'sign': ''}})
     
     # 显示确认
-    agent = agent_bots.find_one({'agent_bot_id':  agent_id})
+    agent = agent_bots.find_one({'agent_bot_id': agent_id})
     old_address = agent.get('wallet_address', '未绑定') if agent else '未绑定'
     
     confirm_text = f"""
@@ -1868,7 +1864,7 @@ def handle_agent_address_input(update: Update, context: CallbackContext, user_id
     
     keyboard = [
         [
-            InlineKeyboardButton("✅ 确认修改", callback_data=f"confirm_agent_address_{agent_id}_{text}"),
+            InlineKeyboardButton("✅ 确认修改", callback_data=f"confirm_agent_address_{agent_id}"),
             InlineKeyboardButton("❌ 取消", callback_data=f"agent_address_config_{agent_id}")
         ]
     ]
@@ -1882,16 +1878,17 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     
-    # 从 callback_data 获取代理商ID和地址
-    data = query.data.replace('confirm_agent_address_', '')
-    parts = data.split('_', 1)
+    # 从 callback_data 获取代理商ID
+    agent_id = query.data.replace('confirm_agent_address_', '')
     
-    if len(parts) != 2:
-        query.edit_message_text("❌ 数据错误")
+    # 从 context.user_data 获取待确认的地址
+    new_address = context.user_data.get('pending_wallet_address')
+    pending_agent_id = context.user_data.get('pending_agent_id')
+    
+    # 验证数据完整性
+    if not new_address or pending_agent_id != agent_id:
+        query.edit_message_text("❌ 数据错误或已过期，请重新操作")
         return
-    
-    agent_id = parts[0]
-    new_address = parts[1]
     
     # 更新代理商地址
     result = agent_bots.update_one(
@@ -1900,6 +1897,10 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
     )
     
     if result.modified_count > 0:
+        # 清除临时数据
+        context.user_data.pop('pending_wallet_address', None)
+        context.user_data.pop('pending_agent_id', None)
+        
         text = f"""
 ✅ <b>地址已更新</b>
 
@@ -1912,10 +1913,13 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
         
         # 通知代理商（可选）
         try:
-            agent = agent_bots.find_one({'agent_bot_id':  agent_id})
+            agent = agent_bots.find_one({'agent_bot_id': agent_id})
             if agent:
                 owner_id = agent.get('owner_id')
-                if owner_id: 
+                agent_token = agent.get('agent_token')
+                if owner_id and agent_token:
+                    # 使用代理机器人发送通知给代理商
+                    agent_bot = Bot(token=agent_token)
                     notify_text = f"""
 🔔 <b>地址变更通知</b>
 
@@ -1924,7 +1928,8 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
 
 如有疑问请联系管理员。
 """
-                    context.bot.send_message(chat_id=owner_id, text=notify_text, parse_mode='HTML')
+                    agent_bot.send_message(chat_id=owner_id, text=notify_text, parse_mode='HTML')
+                    logging.info(f"✅ 已通过代理机器人通知代理商：owner_id={owner_id}")
         except Exception as e:
             logging.error(f"通知代理商失败:  {e}")
     else:
