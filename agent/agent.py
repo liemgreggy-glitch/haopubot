@@ -1332,40 +1332,52 @@ def handle_quantity_input(update: Update, context: CallbackContext):
     # 获取余额
     balance = agent_user.get('USDT', 0)
     
-    # 显示确认订单页面
+    # 显示格式选择页面
     if lang == 'zh':
         text = f"""
-<b>✅您正在购买：{product_name}
+<b>🛒 确认购买
 
-✅ 数量：{quantity}
+商品: {product_name}
+数量: {quantity} 个
+单价: {agent_price:.2f} USDT
+总价: {total_price} USDT
 
-💰 价格：{total_price}
+💰 您的余额：{balance:.2f} USDT
 
-💰 您的余额：{balance:.2f}</b>
+📦 请选择发货格式：</b>
         """.strip()
         
         keyboard = [
             [
-                InlineKeyboardButton("❌ 取消交易", callback_data=f"close_{user_id}"),
-                InlineKeyboardButton("确认购买 ✅", callback_data=f"confirm_buy_{nowuid}:{quantity}:{total_price}")
+                InlineKeyboardButton("Session + JSON", callback_data=f"format_session_{nowuid}:{quantity}:{total_price}"),
+                InlineKeyboardButton("TData 桌面版", callback_data=f"format_tdata_{nowuid}:{quantity}:{total_price}")
+            ],
+            [
+                InlineKeyboardButton("❌ 取消交易", callback_data=f"close_{user_id}")
             ],
             [InlineKeyboardButton("🏠 主菜单", callback_data="back_to_main")]
         ]
     else:
         text = f"""
-<b>✅ You are purchasing: {display_product}
+<b>🛒 Confirm Purchase
 
-✅ Quantity: {quantity}
+Product: {display_product}
+Quantity: {quantity} pcs
+Unit Price: {agent_price:.2f} USDT
+Total: {total_price} USDT
 
-💰 Price: {total_price}
+💰 Your Balance: {balance:.2f} USDT
 
-💰 Your Balance: {balance:.2f}</b>
+📦 Select delivery format:</b>
         """.strip()
         
         keyboard = [
             [
-                InlineKeyboardButton("❌ Cancel", callback_data=f"close_{user_id}"),
-                InlineKeyboardButton("Confirm ✅", callback_data=f"confirm_buy_{nowuid}:{quantity}:{total_price}")
+                InlineKeyboardButton("Session + JSON", callback_data=f"format_session_{nowuid}:{quantity}:{total_price}"),
+                InlineKeyboardButton("TData Desktop", callback_data=f"format_tdata_{nowuid}:{quantity}:{total_price}")
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data=f"close_{user_id}")
             ],
             [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
         ]
@@ -1500,9 +1512,13 @@ def send_account_files(context: CallbackContext, user_id: int, nowuid: str, quan
 
 
 def send_account_files_with_detection(context: CallbackContext, user_id: int, nowuid: str, quantity: int, 
-                                       product_name: str, agent_price: float, order_id: str, username: str = 'unknown', fullname: str = 'unknown'):
+                                       product_name: str, agent_price: float, order_id: str, username: str = 'unknown', 
+                                       fullname: str = 'unknown', delivery_format: str = 'session'):
     """
     打包并发送账号文件（带智能检测）
+    
+    Args:
+        delivery_format: 'session' or 'tdata'
     
     Returns:
         (success, refund_amount)
@@ -1668,15 +1684,71 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         normal_zip_path = f"./协议号发货/{user_id}_{timestamp}_normal.zip"
         os.makedirs('./协议号发货', exist_ok=True)
         
-        with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for account in results['normal']:
-                session_file = account['session'] + '.session'
-                json_file = account['json']
+        if delivery_format == 'tdata':
+            # TData 格式：转换 session 到 tdata
+            try:
+                from TGConvertor import SessionManager
                 
-                if os.path.exists(json_file):
-                    zipf.write(json_file, os.path.basename(json_file))
-                if os.path.exists(session_file):
-                    zipf.write(session_file, os.path.basename(session_file))
+                with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                    for account in results['normal']:
+                        session_file = account['session'] + '.session'
+                        json_file = account['json']
+                        phone = account['phone']
+                        
+                        if os.path.exists(session_file):
+                            try:
+                                # 创建临时目录用于 tdata 转换
+                                temp_tdata_dir = f"./协议号发货/temp_tdata_{user_id}_{timestamp}_{phone.replace('+', '')}"
+                                os.makedirs(temp_tdata_dir, exist_ok=True)
+                                
+                                # 转换 session 到 tdata（离线转换）
+                                session = SessionManager.from_telethon_file(account['session'])
+                                tdata_path = os.path.join(temp_tdata_dir, "tdata")
+                                session.to_tdata(tdata_path)
+                                
+                                # 将 tdata 文件夹添加到 zip
+                                folder_name = phone.replace('+', '')
+                                for root, dirs, files in os.walk(tdata_path):
+                                    for file in files:
+                                        file_path = os.path.join(root, file)
+                                        arcname = os.path.join(folder_name, os.path.relpath(file_path, tdata_path))
+                                        zipf.write(file_path, arcname)
+                                
+                                # 清理临时文件
+                                import shutil
+                                shutil.rmtree(temp_tdata_dir, ignore_errors=True)
+                                
+                            except Exception as e:
+                                logging.error(f"转换 {phone} 到 TData 失败: {e}")
+                                # 转换失败，回退到原始格式
+                                if os.path.exists(json_file):
+                                    zipf.write(json_file, os.path.basename(json_file))
+                                if os.path.exists(session_file):
+                                    zipf.write(session_file, os.path.basename(session_file))
+                                    
+            except ImportError:
+                logging.error("TGConvertor 未安装，回退到 Session 格式")
+                # 回退到 Session 格式
+                with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                    for account in results['normal']:
+                        session_file = account['session'] + '.session'
+                        json_file = account['json']
+                        
+                        if os.path.exists(json_file):
+                            zipf.write(json_file, os.path.basename(json_file))
+                        if os.path.exists(session_file):
+                            zipf.write(session_file, os.path.basename(session_file))
+        else:
+            # Session 格式（默认）
+            with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for account in results['normal']:
+                    session_file = account['session'] + '.session'
+                    json_file = account['json']
+                    
+                    if os.path.exists(json_file):
+                        zipf.write(json_file, os.path.basename(json_file))
+                    if os.path.exists(session_file):
+                        zipf.write(session_file, os.path.basename(session_file))
     
     # 创建未知错误账号zip
     unknown_zip_path = None
@@ -1779,6 +1851,9 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         pass
     
     # 发送检测结果消息
+    format_display = "Session + JSON" if delivery_format == "session" else "TData (桌面版)"
+    format_display_en = "Session + JSON" if delivery_format == "session" else "TData (Desktop)"
+    
     if lang == 'zh':
         result_text = f"""🛒 购买成功！
 
@@ -1796,7 +1871,8 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 💰 实付: {normal_count * agent_price:.2f} USDT
 {'💵 退回: ' + f'{refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
 
-{'📁 正常账号已发送 ↓' if normal_count > 0 else ''}"""
+📁 发货格式: {format_display}
+{'📥 正常账号已发送 ↓' if normal_count > 0 else ''}"""
         
         if unknown_count > 0:
             result_text += f"""
@@ -1824,7 +1900,8 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 💰 Paid: {normal_count * agent_price:.2f} USDT
 {'💵 Refund: ' + f'{refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
 
-{'📁 Normal accounts sent ↓' if normal_count > 0 else ''}"""
+📁 Delivery Format: {format_display_en}
+{'📥 Normal accounts sent ↓' if normal_count > 0 else ''}"""
         
         if unknown_count > 0:
             result_text += f"""
@@ -1844,10 +1921,15 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     # 发送正常账号zip
     if normal_zip_path and os.path.exists(normal_zip_path):
         with open(normal_zip_path, 'rb') as f:
+            if delivery_format == 'tdata':
+                filename = "正常账号_tdata.zip" if lang == 'zh' else "normal_accounts_tdata.zip"
+            else:
+                filename = "正常账号.zip" if lang == 'zh' else "normal_accounts.zip"
+            
             context.bot.send_document(
                 chat_id=user_id,
                 document=f,
-                filename="正常账号.zip" if lang == 'zh' else "normal_accounts.zip"
+                filename=filename
             )
         try:
             os.remove(normal_zip_path)
@@ -1891,6 +1973,213 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     return True, refund_amount
 
 
+def select_delivery_format(update: Update, context: CallbackContext):
+    """处理发货格式选择"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    # 获取用户语言
+    lang = get_user_lang(user_id)
+    
+    # 从callback_data中提取信息: format_{session|tdata}_{nowuid}:{quantity}:{total_price}
+    data = query.data
+    if data.startswith("format_session_"):
+        delivery_format = "session"
+        data = data.replace("format_session_", "")
+    elif data.startswith("format_tdata_"):
+        delivery_format = "tdata"
+        data = data.replace("format_tdata_", "")
+    else:
+        query.answer("❌ Invalid format" if lang != 'zh' else "❌ 格式错误", show_alert=True)
+        return
+    
+    parts = data.split(':')
+    
+    if len(parts) != 3:
+        msg = "❌ Data format error" if lang != 'zh' else "❌ 数据格式错误"
+        query.answer(msg, show_alert=True)
+        return
+    
+    nowuid = parts[0]
+    quantity = int(parts[1])
+    total_price = float(parts[2])
+    
+    # 获取商品信息
+    product = ejfl.find_one({'nowuid': nowuid})
+    if not product:
+        msg = "Product not found" if lang != 'zh' else "商品不存在"
+        query.answer(msg, show_alert=True)
+        return
+    
+    product_name = product.get('projectname', '未知商品')
+    display_product = t(product_name, lang) if lang != 'zh' else product_name
+    hq_price = float(product.get('money', 0))
+    agent_price = hq_price * (1 + COMMISSION_RATE)
+    
+    # 获取用户余额
+    agent_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
+    if not agent_user:
+        query.answer("User not found" if lang != 'zh' else "用户不存在", show_alert=True)
+        return
+    
+    balance = agent_user.get('USDT', 0)
+    
+    # 显示确认页面
+    format_display = "Session + JSON" if delivery_format == "session" else ("TData 桌面版" if lang == 'zh' else "TData Desktop")
+    
+    if lang == 'zh':
+        text = f"""
+<b>✅ 确认购买
+
+商品: {product_name}
+数量: {quantity} 个
+单价: {agent_price:.2f} USDT
+总价: {total_price} USDT
+
+📦 发货格式: {format_display}
+
+💰 您的余额：{balance:.2f} USDT</b>
+        """.strip()
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("❌ 取消交易", callback_data=f"close_{user_id}"),
+                InlineKeyboardButton("确认购买 ✅", callback_data=f"confirm_buy_{delivery_format}_{nowuid}:{quantity}:{total_price}")
+            ],
+            [InlineKeyboardButton("🔙 重选格式", callback_data=f"back_format_{nowuid}:{quantity}:{total_price}")],
+            [InlineKeyboardButton("🏠 主菜单", callback_data="back_to_main")]
+        ]
+    else:
+        text = f"""
+<b>✅ Confirm Purchase
+
+Product: {display_product}
+Quantity: {quantity} pcs
+Unit Price: {agent_price:.2f} USDT
+Total: {total_price} USDT
+
+📦 Delivery Format: {format_display}
+
+💰 Your Balance: {balance:.2f} USDT</b>
+        """.strip()
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data=f"close_{user_id}"),
+                InlineKeyboardButton("Confirm ✅", callback_data=f"confirm_buy_{delivery_format}_{nowuid}:{quantity}:{total_price}")
+            ],
+            [InlineKeyboardButton("🔙 Change Format", callback_data=f"back_format_{nowuid}:{quantity}:{total_price}")],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+        ]
+    
+    try:
+        query.edit_message_text(
+            text=text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logging.warning(f"编辑消息失败: {e}")
+
+
+def back_to_format_selection(update: Update, context: CallbackContext):
+    """返回格式选择页面"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    # 获取用户语言
+    lang = get_user_lang(user_id)
+    
+    # 从callback_data中提取信息: back_format_{nowuid}:{quantity}:{total_price}
+    data = query.data.replace("back_format_", "")
+    parts = data.split(':')
+    
+    if len(parts) != 3:
+        return
+    
+    nowuid = parts[0]
+    quantity = int(parts[1])
+    total_price = float(parts[2])
+    
+    # 获取商品信息
+    product = ejfl.find_one({'nowuid': nowuid})
+    if not product:
+        return
+    
+    product_name = product.get('projectname', '未知商品')
+    display_product = t(product_name, lang) if lang != 'zh' else product_name
+    hq_price = float(product.get('money', 0))
+    agent_price = hq_price * (1 + COMMISSION_RATE)
+    
+    # 获取用户余额
+    agent_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
+    if not agent_user:
+        return
+    
+    balance = agent_user.get('USDT', 0)
+    
+    # 显示格式选择页面
+    if lang == 'zh':
+        text = f"""
+<b>🛒 确认购买
+
+商品: {product_name}
+数量: {quantity} 个
+单价: {agent_price:.2f} USDT
+总价: {total_price} USDT
+
+💰 您的余额：{balance:.2f} USDT
+
+📦 请选择发货格式：</b>
+        """.strip()
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("Session + JSON", callback_data=f"format_session_{nowuid}:{quantity}:{total_price}"),
+                InlineKeyboardButton("TData 桌面版", callback_data=f"format_tdata_{nowuid}:{quantity}:{total_price}")
+            ],
+            [
+                InlineKeyboardButton("❌ 取消交易", callback_data=f"close_{user_id}")
+            ],
+            [InlineKeyboardButton("🏠 主菜单", callback_data="back_to_main")]
+        ]
+    else:
+        text = f"""
+<b>🛒 Confirm Purchase
+
+Product: {display_product}
+Quantity: {quantity} pcs
+Unit Price: {agent_price:.2f} USDT
+Total: {total_price} USDT
+
+💰 Your Balance: {balance:.2f} USDT
+
+📦 Select delivery format:</b>
+        """.strip()
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("Session + JSON", callback_data=f"format_session_{nowuid}:{quantity}:{total_price}"),
+                InlineKeyboardButton("TData Desktop", callback_data=f"format_tdata_{nowuid}:{quantity}:{total_price}")
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data=f"close_{user_id}")
+            ],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+        ]
+    
+    try:
+        query.edit_message_text(
+            text=text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logging.warning(f"编辑消息失败: {e}")
+
+
 def confirm_buy_product(update: Update, context:  CallbackContext):
     """确认购买商品（执行购买）"""
     query = update.callback_query
@@ -1902,8 +2191,18 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
     # 获取用户语言
     lang = get_user_lang(user_id)
     
-    # 从callback_data中提取信息:  confirm_buy_{nowuid}:{quantity}:{total_price}
+    # 从callback_data中提取信息: confirm_buy_{delivery_format}_{nowuid}:{quantity}:{total_price}
     data = query.data.replace("confirm_buy_", "")
+    
+    # 提取发货格式
+    delivery_format = "session"  # 默认格式
+    if data.startswith("session_"):
+        delivery_format = "session"
+        data = data.replace("session_", "")
+    elif data.startswith("tdata_"):
+        delivery_format = "tdata"
+        data = data.replace("tdata_", "")
+    
     parts = data.split(':')
     
     if len(parts) != 3:
@@ -2070,7 +2369,7 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
         if fhtype == '协议号':
             # 使用带检测的发货功能
             success, refund_amount = send_account_files_with_detection(
-                context, user_id, nowuid, quantity, product_name, agent_price, order_id, username, fullname
+                context, user_id, nowuid, quantity, product_name, agent_price, order_id, username, fullname, delivery_format
             )
             
             if not success:
@@ -5021,6 +5320,8 @@ def main():
     dispatcher.add_handler(CallbackQueryHandler(show_product_detail, pattern=r'^product_'))
     dispatcher.add_handler(CallbackQueryHandler(buy_product, pattern=r'^buy_'))
     dispatcher.add_handler(CallbackQueryHandler(show_usage_instruction, pattern=r'^usage_'))
+    dispatcher.add_handler(CallbackQueryHandler(select_delivery_format, pattern=r'^format_'))
+    dispatcher.add_handler(CallbackQueryHandler(back_to_format_selection, pattern=r'^back_format_'))
     dispatcher.add_handler(CallbackQueryHandler(confirm_buy_product, pattern=r'^confirm_buy_'))
     
     # 用户中心相关
