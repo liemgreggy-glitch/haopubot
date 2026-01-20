@@ -12,6 +12,7 @@ import time
 import re
 import qrcode
 import pickle
+import shutil
 from io import BytesIO
 from datetime import datetime
 from dotenv import load_dotenv
@@ -1702,7 +1703,8 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                                 os.makedirs(temp_tdata_dir, exist_ok=True)
                                 
                                 # 转换 session 到 tdata（离线转换）
-                                session = SessionManager.from_telethon_file(account['session'])
+                                # account['session'] 不包含 .session 后缀，但 from_telethon_file 需要完整路径
+                                session = SessionManager.from_telethon_file(session_file.replace('.session', ''))
                                 tdata_path = os.path.join(temp_tdata_dir, "tdata")
                                 session.to_tdata(tdata_path)
                                 
@@ -1715,7 +1717,6 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                                         zipf.write(file_path, arcname)
                                 
                                 # 清理临时文件
-                                import shutil
                                 shutil.rmtree(temp_tdata_dir, ignore_errors=True)
                                 
                             except Exception as e:
@@ -1954,7 +1955,9 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     sold_account_ids = []
     
     for account in results.get('normal', []) + results.get('unknown', []):
-        sold_account_ids.append(account.get('db_id'))
+        db_id = account.get('db_id')
+        if db_id is not None:
+            sold_account_ids.append(db_id)
     
     if sold_account_ids:
         hb.update_many(
@@ -1965,7 +1968,9 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     # 删除坏号数据库记录
     bad_account_ids = []
     for account in results.get('banned', []) + results.get('frozen', []):
-        bad_account_ids.append(account.get('db_id'))
+        db_id = account.get('db_id')
+        if db_id is not None:
+            bad_account_ids.append(db_id)
     
     if bad_account_ids:
         hb.delete_many({"_id": {"$in": bad_account_ids}})
