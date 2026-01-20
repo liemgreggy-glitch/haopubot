@@ -7613,8 +7613,8 @@ def textkeyboard(update: Update, context: CallbackContext):
                 return
         
         # 检查是否在等待代理地址输入（管理员功能）
-        if is_admin(user_id):
-            if handle_agent_address_input(update, context, user_id, text):
+        if is_admin(user_id) and isinstance(sign, str) and sign.startswith('set_agent_wallet_'):
+            if handle_agent_address_input(update, context, user_id, sign):
                 return
 
         get_key_list = get_key.find({})
@@ -10181,8 +10181,21 @@ def handle_all_callbacks(update: Update, context: CallbackContext):
         lang = 'zh'
 
     print(f"收到回调: {query.data}")
+    # ========== 代理商地址配置 ==========
+    if query.data.startswith("agent_settings_"):
+        show_agent_settings(update, context)
+        return
+    elif query.data.startswith("agent_wallet_config_") or query.data.startswith("agent_address_config_"):
+        show_agent_address_config(update, context)
+        return
+    elif query.data.startswith("request_agent_address_"):
+        request_agent_address_input(update, context)
+        return
+    elif query.data. startswith("confirm_agent_address_"):
+        confirm_agent_address_change(update, context)
+        return
 
-    if query.data == "notice":
+    elif query.data == "notice":
         customer_service = os.getenv('CUSTOMER_SERVICE', '@lwmmm')
         alert_text = (
             f"购买的账号只包首次登录，过时不候。\n"
