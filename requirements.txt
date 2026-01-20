@@ -24,3 +24,6 @@ colorlog>=6.0.0
 
 # Telegram Client for account detection
 Telethon>=1.24.0
+
+# TData Converter for TData format support
+TGConvertor>=1.0.0
