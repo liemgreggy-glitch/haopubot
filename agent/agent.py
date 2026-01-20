@@ -1703,8 +1703,8 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                                 os.makedirs(temp_tdata_dir, exist_ok=True)
                                 
                                 # 转换 session 到 tdata（离线转换）
-                                # account['session'] 不包含 .session 后缀，但 from_telethon_file 需要完整路径
-                                session = SessionManager.from_telethon_file(session_file.replace('.session', ''))
+                                # account['session'] 不包含 .session 后缀，from_telethon_file 也不需要后缀
+                                session = SessionManager.from_telethon_file(account['session'])
                                 tdata_path = os.path.join(temp_tdata_dir, "tdata")
                                 session.to_tdata(tdata_path)
                                 
@@ -1717,7 +1717,10 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                                         zipf.write(file_path, arcname)
                                 
                                 # 清理临时文件
-                                shutil.rmtree(temp_tdata_dir, ignore_errors=True)
+                                try:
+                                    shutil.rmtree(temp_tdata_dir)
+                                except Exception as e:
+                                    logging.warning(f"清理临时 tdata 目录失败: {e}")
                                 
                             except Exception as e:
                                 logging.error(f"转换 {phone} 到 TData 失败: {e}")
@@ -1798,9 +1801,11 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                 try:
                     group_id = int(BAD_ACCOUNT_GROUP_ID)
                     
-                    # 构建坏号报告消息
-                    banned_in_list = [acc for acc in bad_accounts if acc in results.get('banned', [])]
-                    frozen_in_list = [acc for acc in bad_accounts if acc in results.get('frozen', [])]
+                    # 构建坏号报告消息 - 使用集合优化查找性能
+                    banned_set = set(id(acc) for acc in results.get('banned', []))
+                    frozen_set = set(id(acc) for acc in results.get('frozen', []))
+                    banned_count_in_list = sum(1 for acc in bad_accounts if id(acc) in banned_set)
+                    frozen_count_in_list = sum(1 for acc in bad_accounts if id(acc) in frozen_set)
                     
                     caption = f"""⚠️ 坏号报告
 
@@ -1808,8 +1813,8 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 用户: @{username if username != 'unknown' else fullname}
 数量: {len(bad_accounts)} 个
 
-❌ 封禁: {len(banned_in_list)} 个
-⚠️ 冻结: {len(frozen_in_list)} 个"""
+❌ 封禁: {banned_count_in_list} 个
+⚠️ 冻结: {frozen_count_in_list} 个"""
                     
                     with open(bad_zip_path, 'rb') as f:
                         context.bot.send_document(
