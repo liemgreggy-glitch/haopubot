@@ -212,14 +212,26 @@ class AccountDetector:
             if not await client.is_user_authorized():
                 return 'banned', 'Session未授权'
             
-            # 获取当前用户信息（检测是否被封禁）
+            # 获取当前用户信息（检测是否被封禁/冻结）
             try:
                 me = await client.get_me()
-            except (AuthKeyUnregisteredError, UserDeactivatedError, UserDeactivatedBanError):
-                return 'banned', '账号已封禁/注销'
+            except UserDeactivatedError:
+                # 账号已被冻结/停用
+                return 'frozen', '账号已冻结 (UserDeactivatedError)'
+            except UserDeactivatedBanError:
+                # 账号已被永久封禁
+                return 'banned', '账号已封禁 (UserDeactivatedBanError)'
+            except AuthKeyUnregisteredError:
+                # 会话已失效，账号可能被冻结
+                return 'frozen', '会话失效 (AuthKeyUnregisteredError)'
             except PhoneNumberBannedError:
-                return 'banned', '手机号已封禁'
+                # 手机号已封禁
+                return 'banned', '手机号已封禁 (PhoneNumberBannedError)'
             except Exception as e:
+                error_str = str(e).lower()
+                # 检查错误消息中是否包含冻结相关关键词
+                if 'deactivat' in error_str or 'unregister' in error_str:
+                    return 'frozen', f'账号可能被冻结: {str(e)}'
                 return 'unknown', f'获取用户信息失败: {str(e)}'
             
             # 访问 @SpamBot
