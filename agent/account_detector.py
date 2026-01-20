@@ -26,23 +26,58 @@ from telethon.errors import (
 )
 import json
 
-# 多语言关键词匹配
+# 多语言关键词匹配 - 4种状态：正常、封禁、冻结、未知
+# 正常账号 - 无限制
 NORMAL_KEYWORDS = [
-    'good news', 'no limits', 'no restrictions',
-    '好消息', '没有限制', '没有任何限制',
+    # 英文关键词
+    'good news, no limits are currently applied',
+    "you're free as a bird",
+    'no limits',
+    'free as a bird',
+    'no restrictions',
+    'all good',
+    'account is free',
+    'working fine',
+    'not limited',
+    # 中文关键词
+    '正常',
+    '没有限制',
+    '一切正常',
+    '无限制',
+    # 其他语言
     'хорошие новости', 'ограничений нет', 'нет ограничений',
     'خبر خوب', 'بدون محدودیت',
     'buenas noticias', 'sin límites',
     'bonne nouvelle', 'aucune limite',
 ]
 
+# 封禁账号 - 永久限制
 BANNED_KEYWORDS = [
-    'permanently limited', 'permanently restricted',
-    '永久限制', '永久受限',
+    # 永久限制的关键指标
+    'permanently banned',
+    'account has been frozen permanently',
+    'permanently restricted',
+    'account is permanently',
+    'banned permanently',
+    'permanent ban',
+    # 违规相关
+    'account was blocked for violations',
+    'telegram terms of service',
+    'blocked for violations',
+    'terms of service',
+    'violations of the telegram',
+    'banned',
+    'suspended',
+    # 中文关键词
+    '永久限制',
+    '永久封禁',
+    '永久受限',
+    # 其他语言
     'навсегда ограничен',
     'محدودیت دائمی',
 ]
 
+# 冻结账号 - 临时限制（不包含永久限制的词）
 FROZEN_KEYWORDS = [
     'limited', 'restricted', 'temporarily',
     '限制', '受限', '暂时',
@@ -50,6 +85,17 @@ FROZEN_KEYWORDS = [
     'محدود', 'موقت',
     'limitado', 'restringido',
     'limité', 'restreint',
+]
+
+# 等待验证状态
+PENDING_KEYWORDS = [
+    'wait',
+    'pending',
+    'verification',
+    # 中文关键词
+    '等待',
+    '审核中',
+    '验证'
 ]
 
 
@@ -172,22 +218,34 @@ class AccountDetector:
             (status, message)
             status: 'normal', 'banned', 'frozen', 'unknown'
         """
+        logging.info(f"📝 开始检测账号: {session_file}")
+        
         # 尝试使用代理
         for retry in range(max_proxy_retries):
             proxy = self.proxy_manager.get_next_proxy() if retry < max_proxy_retries - 1 else None
             
+            if proxy:
+                logging.info(f"🌐 使用代理: {proxy.get('addr')}:{proxy.get('port')} (尝试 {retry+1}/{max_proxy_retries})")
+            else:
+                logging.info(f"🔗 使用直连 (尝试 {retry+1}/{max_proxy_retries})")
+            
             try:
                 result = await self._check_with_proxy(session_file, json_file, proxy)
+                status, message = result
+                logging.info(f"✅ 检测完成: {session_file} -> 状态: {status}")
                 return result
             except Exception as e:
-                logging.warning(f"代理检测失败 (retry {retry+1}/{max_proxy_retries}): {e}")
+                logging.warning(f"⚠️ 代理检测失败 (retry {retry+1}/{max_proxy_retries}): {e}")
                 if retry >= max_proxy_retries - 1:
                     # 所有代理都失败，使用本地直连
                     try:
+                        logging.info(f"🔄 所有代理失败，尝试本地直连...")
                         result = await self._check_with_proxy(session_file, json_file, None)
+                        status, message = result
+                        logging.info(f"✅ 本地直连成功: {session_file} -> 状态: {status}")
                         return result
                     except Exception as e2:
-                        logging.error(f"本地直连也失败: {e2}")
+                        logging.error(f"❌ 本地直连也失败: {e2}")
                         return 'unknown', str(e2)
         
         return 'unknown', '连接失败'
@@ -197,6 +255,7 @@ class AccountDetector:
         client = None
         
         try:
+            logging.debug(f"🔧 创建Telegram客户端: {session_file}")
             # 创建客户端
             client = TelegramClient(
                 session_file,
@@ -206,38 +265,70 @@ class AccountDetector:
             )
             
             # 连接
+            logging.debug(f"🔌 正在连接Telegram服务器...")
             await client.connect()
+            logging.debug(f"✅ 已连接到Telegram服务器")
             
             # 检查是否已登录
+            logging.debug(f"🔑 检查Session授权状态...")
             if not await client.is_user_authorized():
+                logging.warning(f"❌ Session未授权: {session_file}")
                 return 'banned', 'Session未授权'
             
-            # 获取当前用户信息（检测是否被封禁）
+            # 获取当前用户信息（检测是否被封禁/冻结）
             try:
+                logging.debug(f"👤 正在获取用户信息...")
                 me = await client.get_me()
-            except (AuthKeyUnregisteredError, UserDeactivatedError, UserDeactivatedBanError):
-                return 'banned', '账号已封禁/注销'
-            except PhoneNumberBannedError:
-                return 'banned', '手机号已封禁'
+                logging.debug(f"✅ 成功获取用户信息: {me.id}")
+            except UserDeactivatedError as e:
+                # 账号已被冻结/停用
+                logging.warning(f"⚠️ 账号已冻结: UserDeactivatedError - {str(e)}")
+                return 'frozen', f'账号已冻结 (UserDeactivatedError: {str(e)})'
+            except UserDeactivatedBanError as e:
+                # 账号已被永久封禁
+                logging.warning(f"❌ 账号已封禁: UserDeactivatedBanError - {str(e)}")
+                return 'banned', f'账号已封禁 (UserDeactivatedBanError: {str(e)})'
+            except AuthKeyUnregisteredError as e:
+                # 会话已失效，账号可能被冻结
+                logging.warning(f"⚠️ 会话失效: AuthKeyUnregisteredError - {str(e)}")
+                return 'frozen', f'会话失效 (AuthKeyUnregisteredError: {str(e)})'
+            except PhoneNumberBannedError as e:
+                # 手机号已封禁
+                logging.warning(f"❌ 手机号已封禁: PhoneNumberBannedError - {str(e)}")
+                return 'banned', f'手机号已封禁 (PhoneNumberBannedError: {str(e)})'
             except Exception as e:
+                error_str = str(e).lower()
+                logging.warning(f"⚠️ 获取用户信息异常: {e}")
+                # 检查错误消息中是否包含冻结相关关键词
+                if 'deactivat' in error_str or 'unregister' in error_str:
+                    logging.warning(f"⚠️ 检测到冻结关键词: {error_str}")
+                    return 'frozen', f'账号可能被冻结: {str(e)}'
                 return 'unknown', f'获取用户信息失败: {str(e)}'
             
             # 访问 @SpamBot
             try:
+                logging.debug(f"🤖 开始与SpamBot对话...")
                 async with client.conversation('SpamBot') as conv:
                     # 发送 /start
+                    logging.debug(f"📤 发送 /start 到 SpamBot...")
                     await conv.send_message('/start')
                     
                     # 等待回复（最多10秒）
+                    logging.debug(f"⏳ 等待SpamBot回复 (最多10秒)...")
                     response = await asyncio.wait_for(conv.get_response(), timeout=10)
                     response_text = response.message.lower()
                     
+                    logging.debug(f"📥 收到SpamBot回复: {response_text[:100]}...")
+                    
                     # 关键词匹配
                     status = self._match_keywords(response_text)
+                    logging.info(f"🔍 关键词匹配结果: {status}")
                     return status, response_text
             except asyncio.TimeoutError:
+                logging.warning(f"⏱️ SpamBot响应超时")
                 return 'unknown', 'SpamBot无响应'
             except Exception as e:
+                logging.error(f"❌ SpamBot检测失败: {e}")
                 return 'unknown', f'SpamBot检测失败: {str(e)}'
         
         except Exception as e:
@@ -245,6 +336,7 @@ class AccountDetector:
         
         finally:
             if client:
+                logging.debug(f"🔌 断开Telegram连接")
                 await client.disconnect()
     
     def _match_keywords(self, text: str) -> str:
@@ -252,26 +344,38 @@ class AccountDetector:
         多语言关键词匹配
         
         Returns:
-            'normal', 'banned', 'frozen'
+            'normal', 'banned', 'frozen', 'unknown'
         """
         text_lower = text.lower()
         
-        # 优先匹配封禁（永久限制）
+        logging.debug(f"🔍 开始关键词匹配，文本长度: {len(text_lower)}")
+        
+        # 优先匹配封禁（永久限制）- 包含banned和permanent关键词
         for keyword in BANNED_KEYWORDS:
             if keyword.lower() in text_lower:
+                logging.debug(f"❌ 匹配到封禁关键词: '{keyword}'")
                 return 'banned'
         
-        # 然后匹配冻结（临时限制）
+        # 然后匹配等待验证状态 - 作为未知处理
+        for keyword in PENDING_KEYWORDS:
+            if keyword.lower() in text_lower:
+                logging.debug(f"⏳ 匹配到等待验证关键词: '{keyword}'")
+                return 'unknown'
+        
+        # 然后匹配冻结（临时限制）- 不包含永久限制
         for keyword in FROZEN_KEYWORDS:
             if keyword.lower() in text_lower:
+                logging.debug(f"⚠️ 匹配到冻结关键词: '{keyword}'")
                 return 'frozen'
         
         # 最后匹配正常
         for keyword in NORMAL_KEYWORDS:
             if keyword.lower() in text_lower:
+                logging.debug(f"✅ 匹配到正常关键词: '{keyword}'")
                 return 'normal'
         
         # 无法匹配
+        logging.debug(f"❓ 未匹配到任何关键词，返回unknown")
         return 'unknown'
 
 
@@ -311,10 +415,14 @@ class BatchDetector:
         total = len(accounts)
         current = 0
         
+        logging.info(f"🚀 开始批量检测 {total} 个账号，并发数: {self.max_workers}")
+        logging.info(f"📊 代理池大小: {len(self.proxy_manager.proxies)}")
+        
         # 使用线程池并发检测
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # 提交所有任务
             future_to_account = {}
+            logging.info(f"📤 提交所有检测任务到线程池...")
             for account in accounts:
                 future = executor.submit(
                     self._detect_sync,
@@ -322,6 +430,8 @@ class BatchDetector:
                     account['json']
                 )
                 future_to_account[future] = account
+            
+            logging.info(f"✅ 已提交 {len(future_to_account)} 个检测任务，等待执行...")
             
             # 处理完成的任务
             for future in as_completed(future_to_account):
@@ -344,10 +454,18 @@ class BatchDetector:
                     
                     results[status].append(result_item)
                     
-                    logging.info(f"[{current}/{total}] {account['phone']}: {status}")
+                    # 使用表情符号显示状态
+                    status_emoji = {
+                        'normal': '✅',
+                        'banned': '❌',
+                        'frozen': '⚠️',
+                        'unknown': '❓'
+                    }.get(status, '❓')
+                    
+                    logging.info(f"[{current}/{total}] {status_emoji} {account['phone']}: {status}")
                     
                 except Exception as e:
-                    logging.error(f"检测失败 {account['phone']}: {e}")
+                    logging.error(f"❌ 检测失败 [{current}/{total}] {account['phone']}: {e}")
                     result_item = {
                         'phone': account['phone'],
                         'session': account['session'],
@@ -366,6 +484,15 @@ class BatchDetector:
                         progress_callback(current, total, results)
                     except Exception as e:
                         logging.error(f"进度回调失败: {e}")
+        
+        # 输出最终统计
+        logging.info(f"{'='*60}")
+        logging.info(f"📊 批量检测完成！总计: {total} 个账号")
+        logging.info(f"✅ 正常: {len(results['normal'])} 个")
+        logging.info(f"❌ 封禁: {len(results['banned'])} 个")
+        logging.info(f"⚠️ 冻结: {len(results['frozen'])} 个")
+        logging.info(f"❓ 未知: {len(results['unknown'])} 个")
+        logging.info(f"{'='*60}")
         
         return results
     
