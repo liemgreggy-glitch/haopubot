@@ -1747,9 +1747,16 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                             logging.debug(f"    🔄 转换Session到TData: {account['session']}")
                             # 转换 session 到 tdata（离线转换）
                             # account['session'] 不包含 .session 后缀，SessionManager 需要不带后缀的路径
-                            session = SessionManager.from_telethon_file(account['session'])
-                            tdata_path = os.path.join(temp_tdata_dir, "tdata")
-                            session.to_tdata(tdata_path)
+                            # SessionManager.from_telethon_file 是异步函数，需要在事件循环中运行
+                            import asyncio
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                session = loop.run_until_complete(SessionManager.from_telethon_file(account['session']))
+                                tdata_path = os.path.join(temp_tdata_dir, "tdata")
+                                session.to_tdata(tdata_path)
+                            finally:
+                                loop.close()
                             
                             logging.debug(f"    📦 打包TData到ZIP: {folder_name}/")
                             # 将 tdata 文件夹添加到 zip
