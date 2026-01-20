@@ -1864,7 +1864,7 @@ def handle_agent_address_input(update: Update, context: CallbackContext, user_id
     
     keyboard = [
         [
-            InlineKeyboardButton("✅ 确认修改", callback_data=f"confirm_agent_address_{agent_id}_{text}"),
+            InlineKeyboardButton("✅ 确认修改", callback_data=f"confirm_agent_address_{agent_id}"),
             InlineKeyboardButton("❌ 取消", callback_data=f"agent_address_config_{agent_id}")
         ]
     ]
@@ -1878,16 +1878,17 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     
-    # 从 callback_data 获取代理商ID和地址
-    data = query.data.replace('confirm_agent_address_', '')
-    parts = data.split('_', 1)
+    # 从 callback_data 获取代理商ID
+    agent_id = query.data.replace('confirm_agent_address_', '')
     
-    if len(parts) != 2:
-        query.edit_message_text("❌ 数据错误")
+    # 从 context.user_data 获取待确认的地址
+    new_address = context.user_data.get('pending_wallet_address')
+    pending_agent_id = context.user_data.get('pending_agent_id')
+    
+    # 验证数据完整性
+    if not new_address or pending_agent_id != agent_id:
+        query.edit_message_text("❌ 数据错误或已过期，请重新操作")
         return
-    
-    agent_id = parts[0]
-    new_address = parts[1]
     
     # 更新代理商地址
     result = agent_bots.update_one(
@@ -1896,6 +1897,10 @@ def confirm_agent_address_change(update: Update, context: CallbackContext):
     )
     
     if result.modified_count > 0:
+        # 清除临时数据
+        context.user_data.pop('pending_wallet_address', None)
+        context.user_data.pop('pending_agent_id', None)
+        
         text = f"""
 ✅ <b>地址已更新</b>
 
