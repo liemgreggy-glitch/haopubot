@@ -19,6 +19,14 @@ from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 
+# TGConvertor (optional dependency for TData format support)
+try:
+    from TGConvertor import SessionManager
+    TGCONVERTOR_AVAILABLE = True
+except ImportError:
+    TGCONVERTOR_AVAILABLE = False
+    logging.warning("TGConvertor not installed, TData format will not be available")
+
 # 翻译系统
 try:
     from pygtrans import Translate
@@ -1512,6 +1520,24 @@ def send_account_files(context: CallbackContext, user_id: int, nowuid: str, quan
         return False
 
 
+def pack_accounts_to_session_zip(zipf: zipfile.ZipFile, accounts: list):
+    """
+    Helper function to pack accounts in Session + JSON format
+    
+    Args:
+        zipf: ZipFile object to write to
+        accounts: List of account dictionaries with 'session' and 'json' keys
+    """
+    for account in accounts:
+        session_file = account['session'] + '.session'
+        json_file = account['json']
+        
+        if os.path.exists(json_file):
+            zipf.write(json_file, os.path.basename(json_file))
+        if os.path.exists(session_file):
+            zipf.write(session_file, os.path.basename(session_file))
+
+
 def send_account_files_with_detection(context: CallbackContext, user_id: int, nowuid: str, quantity: int, 
                                        product_name: str, agent_price: float, order_id: str, username: str = 'unknown', 
                                        fullname: str = 'unknown', delivery_format: str = 'session'):
@@ -1685,74 +1711,56 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         normal_zip_path = f"./协议号发货/{user_id}_{timestamp}_normal.zip"
         os.makedirs('./协议号发货', exist_ok=True)
         
-        if delivery_format == 'tdata':
+        if delivery_format == 'tdata' and TGCONVERTOR_AVAILABLE:
             # TData 格式：转换 session 到 tdata
-            try:
-                from TGConvertor import SessionManager
-                
-                with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-                    for account in results['normal']:
-                        session_file = account['session'] + '.session'
-                        json_file = account['json']
-                        phone = account['phone']
-                        
-                        if os.path.exists(session_file):
-                            try:
-                                # 创建临时目录用于 tdata 转换
-                                temp_tdata_dir = f"./协议号发货/temp_tdata_{user_id}_{timestamp}_{phone.replace('+', '')}"
-                                os.makedirs(temp_tdata_dir, exist_ok=True)
-                                
-                                # 转换 session 到 tdata（离线转换）
-                                # account['session'] 不包含 .session 后缀，from_telethon_file 也不需要后缀
-                                session = SessionManager.from_telethon_file(account['session'])
-                                tdata_path = os.path.join(temp_tdata_dir, "tdata")
-                                session.to_tdata(tdata_path)
-                                
-                                # 将 tdata 文件夹添加到 zip
-                                folder_name = phone.replace('+', '')
-                                for root, dirs, files in os.walk(tdata_path):
-                                    for file in files:
-                                        file_path = os.path.join(root, file)
-                                        arcname = os.path.join(folder_name, os.path.relpath(file_path, tdata_path))
-                                        zipf.write(file_path, arcname)
-                                
-                                # 清理临时文件
-                                try:
-                                    shutil.rmtree(temp_tdata_dir)
-                                except Exception as e:
-                                    logging.warning(f"清理临时 tdata 目录失败: {e}")
-                                
-                            except Exception as e:
-                                logging.error(f"转换 {phone} 到 TData 失败: {e}")
-                                # 转换失败，回退到原始格式
-                                if os.path.exists(json_file):
-                                    zipf.write(json_file, os.path.basename(json_file))
-                                if os.path.exists(session_file):
-                                    zipf.write(session_file, os.path.basename(session_file))
-                                    
-            except ImportError:
-                logging.error("TGConvertor 未安装，回退到 Session 格式")
-                # 回退到 Session 格式
-                with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-                    for account in results['normal']:
-                        session_file = account['session'] + '.session'
-                        json_file = account['json']
-                        
-                        if os.path.exists(json_file):
-                            zipf.write(json_file, os.path.basename(json_file))
-                        if os.path.exists(session_file):
-                            zipf.write(session_file, os.path.basename(session_file))
-        else:
-            # Session 格式（默认）
             with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
                 for account in results['normal']:
                     session_file = account['session'] + '.session'
                     json_file = account['json']
+                    phone = account['phone']
                     
-                    if os.path.exists(json_file):
-                        zipf.write(json_file, os.path.basename(json_file))
                     if os.path.exists(session_file):
-                        zipf.write(session_file, os.path.basename(session_file))
+                        try:
+                            # 安全的文件夹名称（移除所有特殊字符）
+                            folder_name = re.sub(r'[^\w\-]', '', phone.replace('+', ''))
+                            
+                            # 创建临时目录用于 tdata 转换
+                            temp_tdata_dir = f"./协议号发货/temp_tdata_{user_id}_{timestamp}_{folder_name}"
+                            os.makedirs(temp_tdata_dir, exist_ok=True)
+                            
+                            # 转换 session 到 tdata（离线转换）
+                            # account['session'] 不包含 .session 后缀，SessionManager 需要不带后缀的路径
+                            session = SessionManager.from_telethon_file(account['session'])
+                            tdata_path = os.path.join(temp_tdata_dir, "tdata")
+                            session.to_tdata(tdata_path)
+                            
+                            # 将 tdata 文件夹添加到 zip
+                            for root, dirs, files in os.walk(tdata_path):
+                                for file in files:
+                                    file_path = os.path.join(root, file)
+                                    arcname = os.path.join(folder_name, os.path.relpath(file_path, tdata_path))
+                                    zipf.write(file_path, arcname)
+                            
+                            # 清理临时文件
+                            try:
+                                shutil.rmtree(temp_tdata_dir)
+                            except Exception as e:
+                                logging.warning(f"清理临时 tdata 目录失败: {e}")
+                            
+                        except Exception as e:
+                            logging.error(f"转换 {phone} 到 TData 失败: {e}")
+                            # 转换失败，回退到原始格式
+                            if os.path.exists(json_file):
+                                zipf.write(json_file, os.path.basename(json_file))
+                            if os.path.exists(session_file):
+                                zipf.write(session_file, os.path.basename(session_file))
+        else:
+            # Session 格式（默认）或 TGConvertor 不可用时回退
+            if delivery_format == 'tdata' and not TGCONVERTOR_AVAILABLE:
+                logging.warning("TGConvertor 未安装，回退到 Session 格式")
+            
+            with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                pack_accounts_to_session_zip(zipf, results['normal'])
     
     # 创建未知错误账号zip
     unknown_zip_path = None
@@ -1762,14 +1770,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         os.makedirs('./协议号发货', exist_ok=True)
         
         with zipfile.ZipFile(unknown_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for account in results['unknown']:
-                session_file = account['session'] + '.session'
-                json_file = account['json']
-                
-                if os.path.exists(json_file):
-                    zipf.write(json_file, os.path.basename(json_file))
-                if os.path.exists(session_file):
-                    zipf.write(session_file, os.path.basename(session_file))
+            pack_accounts_to_session_zip(zipf, results['unknown'])
     
     # 发送坏号到群组并删除
     if (banned_count > 0 or frozen_count > 0) and BAD_ACCOUNT_GROUP_ID:
@@ -1787,8 +1788,8 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                     json_file = account['json']
                     phone = account['phone']
                     
-                    # 为每个账号创建文件夹
-                    folder_name = phone.replace('+', '')
+                    # 为每个账号创建安全的文件夹名称（移除所有特殊字符）
+                    folder_name = re.sub(r'[^\w\-]', '', phone.replace('+', ''))
                     
                     # 添加文件到对应文件夹
                     if os.path.exists(json_file):
@@ -1801,11 +1802,11 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                 try:
                     group_id = int(BAD_ACCOUNT_GROUP_ID)
                     
-                    # 构建坏号报告消息 - 使用集合优化查找性能
-                    banned_set = set(id(acc) for acc in results.get('banned', []))
-                    frozen_set = set(id(acc) for acc in results.get('frozen', []))
-                    banned_count_in_list = sum(1 for acc in bad_accounts if id(acc) in banned_set)
-                    frozen_count_in_list = sum(1 for acc in bad_accounts if id(acc) in frozen_set)
+                    # 构建坏号报告消息 - 使用 phone 作为唯一标识符
+                    banned_phones = set(acc.get('phone') for acc in results.get('banned', []))
+                    frozen_phones = set(acc.get('phone') for acc in results.get('frozen', []))
+                    banned_count_in_list = sum(1 for acc in bad_accounts if acc.get('phone') in banned_phones)
+                    frozen_count_in_list = sum(1 for acc in bad_accounts if acc.get('phone') in frozen_phones)
                     
                     caption = f"""⚠️ 坏号报告
 
