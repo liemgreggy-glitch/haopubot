@@ -37,6 +37,10 @@ env/
 .env.*
 !.env.example
 
+# Proxy configuration
+proxy.txt
+!proxy.txt.example
+
 # Logs
 logs/
 *.log
