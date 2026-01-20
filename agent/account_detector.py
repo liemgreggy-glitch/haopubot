@@ -236,20 +236,20 @@ class AccountDetector:
                 logging.debug(f"✅ 成功获取用户信息: {me.id}")
             except UserDeactivatedError as e:
                 # 账号已被冻结/停用
-                logging.warning(f"⚠️ 账号已冻结: UserDeactivatedError")
-                return 'frozen', '账号已冻结 (UserDeactivatedError)'
+                logging.warning(f"⚠️ 账号已冻结: UserDeactivatedError - {str(e)}")
+                return 'frozen', f'账号已冻结 (UserDeactivatedError: {str(e)})'
             except UserDeactivatedBanError as e:
                 # 账号已被永久封禁
-                logging.warning(f"❌ 账号已封禁: UserDeactivatedBanError")
-                return 'banned', '账号已封禁 (UserDeactivatedBanError)'
+                logging.warning(f"❌ 账号已封禁: UserDeactivatedBanError - {str(e)}")
+                return 'banned', f'账号已封禁 (UserDeactivatedBanError: {str(e)})'
             except AuthKeyUnregisteredError as e:
                 # 会话已失效，账号可能被冻结
-                logging.warning(f"⚠️ 会话失效: AuthKeyUnregisteredError")
-                return 'frozen', '会话失效 (AuthKeyUnregisteredError)'
+                logging.warning(f"⚠️ 会话失效: AuthKeyUnregisteredError - {str(e)}")
+                return 'frozen', f'会话失效 (AuthKeyUnregisteredError: {str(e)})'
             except PhoneNumberBannedError as e:
                 # 手机号已封禁
-                logging.warning(f"❌ 手机号已封禁: PhoneNumberBannedError")
-                return 'banned', '手机号已封禁 (PhoneNumberBannedError)'
+                logging.warning(f"❌ 手机号已封禁: PhoneNumberBannedError - {str(e)}")
+                return 'banned', f'手机号已封禁 (PhoneNumberBannedError: {str(e)})'
             except Exception as e:
                 error_str = str(e).lower()
                 logging.warning(f"⚠️ 获取用户信息异常: {e}")

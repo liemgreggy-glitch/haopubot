@@ -1915,11 +1915,11 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 ⚠️ 冻结: {frozen_count} 个
 
 💰 实付: {normal_count * agent_price:.2f} USDT
-{'💵 退回: ' + f'{refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
+{f'💵 退回: {refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
 📦 剩余余额: {current_balance:.2f} USDT
 
 📁 发货格式: {format_display}
-{'📥 正常账号已发送 ↓' if normal_count > 0 else ''}"""
+{f'📥 正常账号已发送 ↓' if normal_count > 0 else ''}"""
         
         if unknown_count > 0:
             result_text += f"""
@@ -1945,11 +1945,11 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 ⚠️ Frozen: {frozen_count} pcs
 
 💰 Paid: {normal_count * agent_price:.2f} USDT
-{'💵 Refund: ' + f'{refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
+{f'💵 Refund: {refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
 📦 Remaining Balance: {current_balance:.2f} USDT
 
 📁 Delivery Format: {format_display_en}
-{'📥 Normal accounts sent ↓' if normal_count > 0 else ''}"""
+{f'📥 Normal accounts sent ↓' if normal_count > 0 else ''}"""
         
         if unknown_count > 0:
             result_text += f"""
