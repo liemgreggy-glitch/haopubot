@@ -2214,20 +2214,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         logging.info(f"🗑️ 从数据库删除 {len(bad_account_ids)} 个坏号记录")
         hb.delete_many({"_id": {"$in": bad_account_ids}})
     
-    # 发送购买完成后的按钮消息
-    # 首先设置底部固定菜单
-    if lang == 'zh':
-        menu_text = "✅ 购买完成！底部菜单已启用"
-    else:
-        menu_text = "✅ Purchase completed! Bottom menu enabled"
-    
-    context.bot.send_message(
-        chat_id=user_id,
-        text=menu_text,
-        reply_markup=get_bottom_menu(lang)
-    )
-    
-    # 然后发送感谢消息和内联按钮
+    # 发送购买完成后的感谢消息和内联按钮
     if lang == 'zh':
         thank_you_text = """━━━━━━━━━━━━━━━━━━━━
 🎉 感谢您的购买！
