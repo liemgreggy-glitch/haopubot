@@ -789,19 +789,15 @@ def start(update: Update, context: CallbackContext):
         media_url=BANNER_IMAGE_URL,
         caption=welcome_text,
         parse_mode='HTML',
-        reply_markup=get_bottom_menu(lang)
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     
-    # 发送带内联按钮的欢迎消息
-    if lang == 'zh':
-        button_text = "请使用下方菜单或按钮进行操作："
-    else:
-        button_text = "Please use the menu or buttons below:"
-    
+    # 发送一个简短消息来激活底部菜单
+    menu_activation_text = "⬇️" if lang != 'zh' else "⬇️"
     context.bot.send_message(
         chat_id=user_id,
-        text=button_text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        text=menu_activation_text,
+        reply_markup=get_bottom_menu(lang)
     )
 
 def show_product_list(update:  Update, context: CallbackContext):
