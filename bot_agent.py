@@ -1857,7 +1857,7 @@ def handle_agent_address_input(update: Update, context: CallbackContext, user_id
 
 👤 代理商：{agent.get('agent_name', 'Unknown') if agent else 'Unknown'}
 📍 旧地址：<code>{old_address}</code>
-���� 新地址：<code>{text}</code>
+💳 新地址：<code>{text}</code>
 
 确认修改吗？
 """
