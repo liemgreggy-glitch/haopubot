@@ -3632,7 +3632,7 @@ def show_my_orders(update: Update, context: CallbackContext):
     orders = list(
         agent_orders.find({
             'agent_bot_id': AGENT_BOT_ID,
-            'user_id': user_id
+            'customer_id': user_id
         }).sort('order_time', -1).limit(10)
     )
     
@@ -3655,7 +3655,7 @@ def show_my_orders(update: Update, context: CallbackContext):
             # 格式化时间 (显示: 2026-01-21 11:38)
             order_time_display = order_time[:16] if len(order_time) >= 16 else order_time
             
-            product_name = order.get('product_name', '未知商品')
+            product_name = order.get('product_name', '未知商品' if lang == 'zh' else 'Unknown Product')
             # 翻译商品名
             display_product = t(product_name, lang) if lang != 'zh' else product_name
             
