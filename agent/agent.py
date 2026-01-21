@@ -789,6 +789,18 @@ def start(update: Update, context: CallbackContext):
         media_url=BANNER_IMAGE_URL,
         caption=welcome_text,
         parse_mode='HTML',
+        reply_markup=get_bottom_menu(lang)
+    )
+    
+    # 发送带内联按钮的欢迎消息
+    if lang == 'zh':
+        button_text = "请使用下方菜单或按钮进行操作："
+    else:
+        button_text = "Please use the menu or buttons below:"
+    
+    context.bot.send_message(
+        chat_id=user_id,
+        text=button_text,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
