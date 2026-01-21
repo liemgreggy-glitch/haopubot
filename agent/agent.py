@@ -19,13 +19,14 @@ from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 
-# TGConvertor (optional dependency for TData format support)
+# opentele (for TData format support)
 try:
-    from TGConvertor import SessionManager
+    from opentele.tl import TelegramClient as OpenTeleClient
+    from opentele.api import API, UseCurrentSession
     TGCONVERTOR_AVAILABLE = True
 except ImportError:
     TGCONVERTOR_AVAILABLE = False
-    logging.warning("TGConvertor not installed, TData format will not be available")
+    logging.warning("opentele not installed, TData format will not be available")
 
 # 翻译系统
 try:
@@ -360,7 +361,12 @@ def send_order_notify_to_group(order_type, order_data, bot=None):
             user_id = order_data['user_id']
             category = order_data['category']
             product_name = order_data['product_name']
-            quantity = order_data['quantity']
+            original_quantity = order_data.get('original_quantity', order_data.get('quantity', 0))
+            normal_count = order_data.get('normal_count', 0)
+            banned_count = order_data.get('banned_count', 0)
+            frozen_count = order_data.get('frozen_count', 0)
+            unknown_count = order_data.get('unknown_count', 0)
+            delivered_count = order_data.get('delivered_count', original_quantity)
             total_price = order_data['total_price']
             hq_total_price = order_data['hq_total_price']
             agent_price = order_data['agent_price']
@@ -376,22 +382,29 @@ def send_order_notify_to_group(order_type, order_data, bot=None):
 <b>👤 用户名: </b> <b>{username_display}</b>
 <b>💎 利润加价:</b> <b>{profit_per_unit:.2f}U</b>
 <b>🧾 订单号:</b> <code>{order_id}</code>
-━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━
 <b>📅 日期|时间:</b> <b>{order_time}</b>
 <b>👤 来自用户:</b> <b>{user_id}</b>
 <b>🏷 分类:</b> <b>{category}</b>
 <b>📦 商品:</b> <b>{product_name}</b>
-<b>✅ 购买数量:</b> <b>{quantity}</b>
+━━━━━━━━━━━━━━━━━
+<b>🛒 购买数量:</b> <b>{original_quantity}</b>
+<b>✅ 存活: </b> <b>{normal_count}</b>
+<b>❌ 封禁:</b> <b>{banned_count}</b>
+<b>❄️ 冻结:</b> <b>{frozen_count}</b>
+<b>❓ 未知:</b> <b>{unknown_count}</b>
+<b>📦 实际发货:</b> <b>{delivered_count}</b>
+━━━━━━━━━━━━━━━━━
 <b>💰 订单总价值:</b> <b>{total_price:.2f}U</b>
 <b>💵 总部原价:</b> <b>{hq_total_price:.2f}U</b>
 <b>💲 单价（代理）:</b> <b>{agent_price:.2f}U</b>
 <b>💎 本单利润:</b> <b>{profit:.2f}U</b>
 <b>💰 用户旧余额:</b> <b>{old_balance:.2f}U</b>
-<b>💰 用户当前余额: </b> <b>{new_balance:.2f}U</b>
+<b>💰 用户当前余额:</b> <b>{new_balance:.2f}U</b>
 <b>📊 累计消费:</b> <b>{total_spent:.2f}U (共 {total_orders} 单)</b>
 ━━━━━━━━━━━━━━━━━━
-<b>✅ 您从这笔交易中获得的利润({quantity} * {profit_per_unit:.2f}U):</b> <b>{profit:.2f}</b>"""
-            
+<b>✅ 您从这笔交易中获得的利润({delivered_count} * {profit_per_unit:.2f}U):</b> <b>{profit:.2f}</b>"""
+
         elif order_type == 'recharge':
             # 充值订单通知
             username_display = f"@{order_data['username']}" if order_data['username'] and order_data['username'] != 'unknown' else f"{order_data['user_id']}"
@@ -864,9 +877,9 @@ def show_category_products(update: Update, context: CallbackContext):
     else:
         text = f"""📦 <b>{display_category} - Select product:</b>
 
-❗️Accounts with password:  1 hour after-sales. Unknown 2FA:  30 minutes! 
+❗️Accounts with password:  1 hour after-sales.Unknown 2FA:  30 minutes! 
 
-❗️Please check account immediately after purchase. Provide proof for after-sales. Timeout at your own risk!"""
+❗️Please check account immediately after purchase.Provide proof for after-sales.Timeout at your own risk!"""
     
     keyboard = []
     for product in products:
@@ -1475,7 +1488,7 @@ def send_account_files(context: CallbackContext, user_id: int, nowuid: str, quan
 
 🔐 2FA Password: Check【two2fa】in the json file!
 
-⚠️ Note: Please check accounts immediately. Contact support within 1 hour if there are issues! 
+⚠️ Note: Please check accounts immediately.Contact support within 1 hour if there are issues! 
 
 ‼️ After support period, losses are your responsibility! 
 
@@ -1556,7 +1569,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     # 检查是否启用检测
     if not ENABLE_ACCOUNT_DETECTION or not ACCOUNT_DETECTOR_AVAILABLE or not API_ID or not API_HASH:
         logging.warning("账号检测未启用或配置不完整，使用普通发货")
-        return send_account_files(context, user_id, nowuid, quantity), 0.0
+        return send_account_files(context, user_id, nowuid, quantity), 0.0, {'normal': quantity, 'banned': 0, 'frozen': 0, 'unknown': 0}
     
     # 从数据库获取指定数量的账号
     query_condition = {"nowuid": nowuid, "state": 0}
@@ -1572,7 +1585,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         logging.error(f"库存不足: 需要{quantity}个，实际只有{len(accounts)}个")
         msg = "❌ Out of stock, purchase failed" if lang != 'zh' else "❌ 库存不足，购买失败"
         context.bot.send_message(chat_id=user_id, text=msg)
-        return False, 0.0
+        return False, 0.0, {'normal': 0, 'banned':  0, 'frozen': 0, 'unknown': 0}
     
     # 准备检测账号列表
     detection_accounts = []
@@ -1600,12 +1613,12 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     logging.info(f"🔍 开始账号质量检测: 用户={user_id}, 数量={quantity}")
     
     if lang == 'zh':
-        progress_text = """🔍 正在检测账号质量... 
+        progress_text = """🔍 正在检测账号质量...
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 检测进度: 0/{total}
 
-✅ 正常: 0
+✅ 存活: 0
 ❌ 封禁: 0
 ⚠️ 冻结: 0
 ❓ 未知: 0
@@ -1613,7 +1626,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 ⏳ 检测中...
 ━━━━━━━━━━━━━━━━━━━━""".format(total=quantity)
     else:
-        progress_text = """🔍 Checking account quality... 
+        progress_text = """🔍 Checking account quality...
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 Progress: 0/{total}
@@ -1632,15 +1645,24 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     )
     
     # 进度回调函数
+    last_progress_update = [0]  # 用列表存储，方便在闭包中修改
+    
     def update_progress(current, total, results):
-        try:
-            if lang == 'zh':
-                updated_text = """🔍 正在检测账号质量... 
+        import time
+        # 限制刷新频率：每5秒最多刷新一次，或者完成时刷新
+        now = time.time()
+        if now - last_progress_update[0] < 5 and current < total:
+            return  # 跳过刷新
+        last_progress_update[0] = now
+        
+        try: 
+            if lang == 'zh': 
+                updated_text = """🔍 正在检测账号质量...
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 检测进度: {current}/{total}
 
-✅ 正常: {normal}
+✅ 存活: {normal}
 ❌ 封禁: {banned}
 ⚠️ 冻结: {frozen}
 ❓ 未知: {unknown}
@@ -1655,7 +1677,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                     unknown=len(results.get('unknown', []))
                 )
             else:
-                updated_text = """🔍 Checking account quality... 
+                updated_text = """🔍 Checking account quality...
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 Progress: {current}/{total}
@@ -1663,7 +1685,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 ✅ Normal: {normal}
 ❌ Banned: {banned}
 ⚠️ Frozen: {frozen}
-❓ Unknown: {unknown}
+❓ Unknown:  {unknown}
 
 ⏳ Checking...
 ━━━━━━━━━━━━━━━━━━━━""".format(
@@ -1680,7 +1702,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
                 message_id=progress_msg.message_id,
                 text=updated_text
             )
-        except Exception as e:
+        except Exception as e: 
             logging.error(f"更新进度失败: {e}")
     
     # 执行批量检测
@@ -1696,7 +1718,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
             context.bot.delete_message(chat_id=user_id, message_id=progress_msg.message_id)
         except:
             pass
-        return send_account_files(context, user_id, nowuid, quantity), 0.0
+        return send_account_files(context, user_id, nowuid, quantity), 0.0, {'normal': quantity, 'banned':  0, 'frozen': 0, 'unknown': 0}
     
     # 处理检测结果
     normal_count = len(results.get('normal', []))
@@ -1705,7 +1727,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     unknown_count = len(results.get('unknown', []))
     
     logging.info(f"📊 检测结果统计:")
-    logging.info(f"   ✅ 正常: {normal_count}")
+    logging.info(f"   ✅ 存活: {normal_count}")
     logging.info(f"   ❌ 封禁: {banned_count}")
     logging.info(f"   ⚠️ 冻结: {frozen_count}")
     logging.info(f"   ❓ 未知: {unknown_count}")
@@ -1716,85 +1738,200 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     
     logging.info(f"💰 退款计算: {refund_count} 个坏号 × {agent_price:.2f} = {refund_amount:.2f} USDT")
     
-    # 创建正常账号zip
+    # 创建存活账号zip
     normal_zip_path = None
     if normal_count > 0:
-        logging.info(f"📦 开始打包 {normal_count} 个正常账号 (格式: {delivery_format})")
+        logging.info(f"📦 开始打包 {normal_count} 个存活账号 (格式: {delivery_format})")
         timestamp = int(time.time())
         normal_zip_path = f"./协议号发货/{user_id}_{timestamp}_normal.zip"
         os.makedirs('./协议号发货', exist_ok=True)
         
         if delivery_format == 'tdata' and TGCONVERTOR_AVAILABLE:
-            logging.info(f"🔄 使用TData格式转换")
-            # TData 格式：转换 session 到 tdata
-            with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-                for idx, account in enumerate(results['normal'], 1):
-                    session_file = account['session'] + '.session'
-                    json_file = account['json']
-                    phone = account['phone']
+            logging.info(f"🔄 使用TData格式转换 (并发)")
+            
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import threading
+            
+            # 单个账号转换函数
+            def convert_single_account(account, user_id, timestamp):
+                session_file = account['session'] + '.session'
+                json_file = account['json']
+                phone = account['phone']
+                folder_name = re.sub(r'[^\w\-]', '', phone.replace('+', ''))
+                
+                result = {
+                    'phone': phone,
+                    'folder_name': folder_name,
+                    'success':  False,
+                    'tdata_path': None,
+                    'session_file': session_file,
+                    'json_file':  json_file
+                }
+                
+                if not os.path.exists(session_file):
+                    logging.warning(f"⚠️ {phone} session文件不存在:  {session_file}")
+                    return result
+                
+                clean_session_base = None
+                temp_tdata_dir = None
+                
+                try:
+                    temp_tdata_dir = f"./协议号发货/temp_tdata_{user_id}_{timestamp}_{folder_name}_{threading.current_thread().ident}"
+                    os.makedirs(temp_tdata_dir, exist_ok=True)
                     
-                    logging.info(f"  [{idx}/{normal_count}] 转换 {phone} 到 TData...")
+                    import sqlite3
+                    import shutil
                     
-                    if os.path.exists(session_file):
+                    # 正确的文件路径处理
+                    # session_file = xxx.session
+                    # clean_session_base = xxx_clean_12345 (不带.session)
+                    # clean_session_path = xxx_clean_12345.session (带.session)
+                    clean_session_base = session_file.replace('.session', '') + f"_clean_{threading.current_thread().ident}"
+                    clean_session_path = clean_session_base + '.session'
+                    
+                    # 复制原始session到临时文件
+                    shutil.copy2(session_file, clean_session_path)
+                    
+                    # 清理多余的表
+                    try:
+                        conn = sqlite3.connect(clean_session_path)
+                        cursor = conn.cursor()
+                        expected_tables = {'sessions', 'entities', 'sent_files', 'update_state', 'version'}
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                        current_tables = {row[0] for row in cursor.fetchall()}
+                        for table in (current_tables - expected_tables):
+                            cursor.execute(f"DROP TABLE IF EXISTS {table}")
+                        conn.commit()
+                        conn.close()
+                    except Exception as db_err: 
+                        logging.warning(f"⚠️ {phone} 清理session表失败:  {db_err}")
+                    
+                    import asyncio
+                    
+                    async def do_convert():
+                        client = None
                         try:
-                            # 安全的文件夹名称（移除所有特殊字符）
-                            folder_name = re.sub(r'[^\w\-]', '', phone.replace('+', ''))
+                            # OpenTeleClient 会自动加 .session 后缀，所以传不带后缀的路径
+                            client = OpenTeleClient(clean_session_base)
                             
-                            # 创建临时目录用于 tdata 转换
-                            temp_tdata_dir = f"./协议号发货/temp_tdata_{user_id}_{timestamp}_{folder_name}"
-                            os.makedirs(temp_tdata_dir, exist_ok=True)
+                            await asyncio.wait_for(client.connect(), timeout=15)
                             
-                            logging.debug(f"    🔄 转换Session到TData: {account['session']}")
+                            is_auth = await asyncio.wait_for(client.is_user_authorized(), timeout=5)
+                            if not is_auth:
+                                logging.warning(f"⚠️ {phone} Session未授权，跳过转换")
+                                return None
                             
-                            # 验证session文件存在
-                            if not os.path.exists(session_file):
-                                raise FileNotFoundError(f"Session文件不存在: {session_file}")
+                            tdata_path = os.path.join(temp_tdata_dir, "tdata")
+                            tdesk = await client.ToTDesktop(flag=UseCurrentSession)
+                            tdesk.SaveTData(tdata_path)
                             
-                            # 转换 session 到 tdata（离线转换）
-                            # account['session'] 不包含 .session 后缀，SessionManager 需要不带后缀的路径
-                            # SessionManager.from_telethon_file 是异步函数，需要在事件循环中运行
-                            import asyncio
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                logging.debug(f"    📥 加载Session文件: {account['session']}")
-                                session = loop.run_until_complete(SessionManager.from_telethon_file(account['session']))
-                                logging.debug(f"    ✅ Session加载成功，类型: {type(session)}")
-                                
-                                tdata_path = os.path.join(temp_tdata_dir, "tdata")
-                                logging.debug(f"    💾 转换到TData目录: {tdata_path}")
-                                session.to_tdata(tdata_path)
-                                logging.debug(f"    ✅ TData转换完成")
-                            finally:
-                                loop.close()
-                            
-                            logging.debug(f"    📦 打包TData到ZIP: {folder_name}/")
-                            # 将 tdata 文件夹添加到 zip
-                            for root, dirs, files in os.walk(tdata_path):
-                                for file in files:
-                                    file_path = os.path.join(root, file)
-                                    arcname = os.path.join(folder_name, os.path.relpath(file_path, tdata_path))
-                                    zipf.write(file_path, arcname)
-                            
-                            logging.info(f"    ✅ {phone} TData转换成功")
-                            
-                            # 清理临时文件
-                            try:
-                                shutil.rmtree(temp_tdata_dir)
-                            except Exception as e:
-                                logging.warning(f"清理临时 tdata 目录失败: {e}")
-                            
+                            return tdata_path
                         except Exception as e:
-                            import traceback
-                            error_details = traceback.format_exc()
-                            logging.error(f"    ❌ 转换 {phone} 到 TData 失败: {type(e).__name__}: {str(e)}")
-                            logging.debug(f"    详细错误信息:\n{error_details}")
-                            logging.info(f"    🔄 回退到Session格式")
-                            # 转换失败，回退到原始格式
-                            if os.path.exists(json_file):
-                                zipf.write(json_file, os.path.basename(json_file))
-                            if os.path.exists(session_file):
-                                zipf.write(session_file, os.path.basename(session_file))
+                            logging.error(f"⚠️ {phone} 转换内部错误: {e}")
+                            return None
+                        finally:
+                            if client: 
+                                try:
+                                    await asyncio.wait_for(client.disconnect(), timeout=5)
+                                except:
+                                    pass
+                    
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        tdata_path = loop.run_until_complete(
+                            asyncio.wait_for(do_convert(), timeout=30)
+                        )
+                        if tdata_path:
+                            result['success'] = True
+                            result['tdata_path'] = tdata_path
+                            result['temp_dir'] = temp_tdata_dir
+                        else:
+                            logging.warning(f"⚠️ {phone} 转换返回空")
+                    except asyncio.TimeoutError:
+                        logging.error(f"转换 {phone} 超时(30秒)")
+                    except Exception as conv_err:
+                        logging.error(f"转换 {phone} 异步错误: {conv_err}")
+                    finally:
+                        try:
+                            pending = asyncio.all_tasks(loop)
+                            for task in pending: 
+                                task.cancel()
+                            if pending:
+                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                            loop.run_until_complete(loop.shutdown_asyncgens())
+                        except:
+                            pass
+                        try:
+                            loop.close()
+                        except:
+                            pass
+                        asyncio.set_event_loop(None)
+                        
+                except Exception as e: 
+                    logging.error(f"转换 {phone} 失败: {e}")
+                
+                finally:
+                    # 清理临时session文件
+                    if clean_session_base:
+                        try:
+                            os.remove(clean_session_base + '.session')
+                        except:
+                            pass
+                
+                return result
+            
+            # 并发转换 (最多20个线程)
+            max_workers = min(20, normal_count)
+            converted_results = []
+            
+            logging.info(f"🚀 启动 {max_workers} 个转换线程")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(convert_single_account, acc, user_id, timestamp): acc 
+                    for acc in results['normal']
+                }
+                for idx, future in enumerate(as_completed(futures), 1):
+                    try:
+                        res = future.result(timeout=60)
+                        converted_results.append(res)
+                        if res['success']:
+                            logging.info(f"  [{idx}/{normal_count}] ✅ {res['phone']} 转换成功")
+                        else: 
+                            logging.warning(f"  [{idx}/{normal_count}] ❌ {res['phone']} 转换失败")
+                    except Exception as e:
+                        logging.error(f"  [{idx}/{normal_count}] ❌ 转换异常: {e}")
+            
+            # 打包成功转换的账号
+            logging.info(f"📦 开始打包...")
+            with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for res in converted_results: 
+                    if res['success'] and res['tdata_path']:
+                        folder_name = res['folder_name']
+                        tdata_path = res['tdata_path']
+                        session_file = res['session_file']
+                        json_file = res['json_file']
+                        
+                        # 添加 tdata 文件
+                        for root, dirs, files in os.walk(tdata_path):
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                arcname = os.path.join(folder_name, "tdata", os.path.relpath(file_path, tdata_path))
+                                zipf.write(file_path, arcname)
+                        
+                        # 添加原始文件
+                        if os.path.exists(session_file):
+                            zipf.write(session_file, os.path.join(folder_name, os.path.basename(session_file)))
+                        if os.path.exists(json_file):
+                            zipf.write(json_file, os.path.join(folder_name, os.path.basename(json_file)))
+                        
+                        # 清理临时目录
+                        try:
+                            shutil.rmtree(res.get('temp_dir', ''), ignore_errors=True)
+                        except:
+                            pass
+            
+            logging.info(f"✅ TData并发转换完成")
         else:
             # Session 格式（默认）或 TGConvertor 不可用时回退
             if delivery_format == 'tdata' and not TGCONVERTOR_AVAILABLE:
@@ -1805,7 +1942,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
             with zipfile.ZipFile(normal_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
                 pack_accounts_to_session_zip(zipf, results['normal'])
         
-        logging.info(f"✅ 正常账号打包完成: {normal_zip_path}")
+        logging.info(f"✅ 存活账号打包完成: {normal_zip_path}")
     
     # 创建未知错误账号zip
     unknown_zip_path = None
@@ -1913,10 +2050,10 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
     
     # 获取用户最新余额（检测后可能有退款）
     updated_agent_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
-    current_balance = updated_agent_user.get('USDT', 0) if updated_agent_user else 0
+    current_balance = (updated_agent_user.get('USDT', 0) if updated_agent_user else 0) + refund_amount
     
     logging.info(f"📊 购买结果汇总:")
-    logging.info(f"   💰 实付: {normal_count * agent_price:.2f} USDT (正常账号)")
+    logging.info(f"   💰 实付: {(normal_count + unknown_count) * agent_price:.2f} USDT (实际发货)")
     logging.info(f"   💵 退回: {refund_amount:.2f} USDT (坏号)")
     logging.info(f"   📦 剩余余额: {current_balance:.2f} USDT")
     
@@ -1930,16 +2067,16 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
 ━━━━━━━━━━━━━━━━━━━━
 
 🔍 检测结果: 
-✅ 正常: {normal_count} 个
+✅ 存活: {normal_count} 个
 ❌ 封禁: {banned_count} 个
 ⚠️ 冻结: {frozen_count} 个
 
-💰 实付: {normal_count * agent_price:.2f} USDT
+💰 实付: {(normal_count + unknown_count) * agent_price:.2f} USDT
 {f'💵 退回: {refund_amount:.2f} USDT ✅' if refund_amount > 0 else ''}
 📦 剩余余额: {current_balance:.2f} USDT
 
 📁 发货格式: {format_display}
-{f'📥 正常账号已发送 ↓' if normal_count > 0 else ''}"""
+{f'📥 存活账号已发送 ↓' if normal_count > 0 else ''}"""
         
         if unknown_count > 0:
             result_text += f"""
@@ -1986,13 +2123,13 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         text=result_text
     )
     
-    # 发送正常账号zip
+    # 发送存活账号zip
     if normal_zip_path and os.path.exists(normal_zip_path):
         with open(normal_zip_path, 'rb') as f:
             if delivery_format == 'tdata':
-                filename = "正常账号_tdata.zip" if lang == 'zh' else "normal_accounts_tdata.zip"
+                filename = f"存活账号-{normal_count}_tdata.zip" if lang == 'zh' else f"normal_accounts-{normal_count}_tdata.zip"
             else:
-                filename = "正常账号.zip" if lang == 'zh' else "normal_accounts.zip"
+                filename = f"存活账号-{normal_count}.zip" if lang == 'zh' else f"normal_accounts-{normal_count}.zip"
             
             context.bot.send_document(
                 chat_id=user_id,
@@ -2017,7 +2154,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         except:
             pass
     
-    # 标记正常和未知错误账号为已售出
+    # 标记存活和未知错误账号为已售出
     timer = beijing_now_str()
     sold_account_ids = []
     
@@ -2044,7 +2181,7 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         logging.info(f"🗑️ 从数据库删除 {len(bad_account_ids)} 个坏号记录")
         hb.delete_many({"_id": {"$in": bad_account_ids}})
     
-    return True, refund_amount
+    return True, refund_amount, {'normal':  normal_count, 'banned':  banned_count, 'frozen':  frozen_count, 'unknown':  unknown_count}
 
 
 def select_delivery_format(update: Update, context: CallbackContext):
@@ -2254,19 +2391,32 @@ Total: {total_price} USDT
         logging.warning(f"编辑消息失败: {e}")
 
 
-def confirm_buy_product(update: Update, context:  CallbackContext):
+def confirm_buy_product(update:  Update, context: CallbackContext):
     """确认购买商品（执行购买）"""
+    logging.info("=" * 60)
+    logging.info("🛒 [CONFIRM_BUY] 回调函数触发!")
+    logging.info("=" * 60)
+    
     query = update.callback_query
-    query.answer()
+    logging.info(f"🛒 [CONFIRM_BUY] callback_data: {query.data}")
+    
+    # ❌ 删除这行！不要在这里调用 query.answer()
+    # query.answer()
+    
+    user_id = query.from_user.id
     user_id = query.from_user.id
     username = query.from_user.username or 'unknown'
     fullname = query.from_user.full_name.replace('<', '').replace('>', '')
     
+    logging.info(f"🛒 [CONFIRM_BUY] 用户ID: {user_id}, 用户名:  @{username}")
+    
     # 获取用户语言
     lang = get_user_lang(user_id)
+    logging.info(f"🛒 [CONFIRM_BUY] 语言: {lang}")
     
-    # 从callback_data中提取信息: confirm_buy_{delivery_format}_{nowuid}:{quantity}:{total_price}
+    # 从callback_data中提取信息:  confirm_buy_{delivery_format}_{nowuid}:{quantity}:{total_price}
     data = query.data.replace("confirm_buy_", "")
+    logging.info(f"🛒 [CONFIRM_BUY] 解析数据: {data}")
     
     # 提取发货格式
     delivery_format = "session"  # 默认格式
@@ -2277,62 +2427,115 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
         delivery_format = "tdata"
         data = data.replace("tdata_", "")
     
+    logging.info(f"🛒 [CONFIRM_BUY] 发货格式:  {delivery_format}")
+    
     parts = data.split(':')
+    logging.info(f"🛒 [CONFIRM_BUY] 解析parts: {parts}")
     
     if len(parts) != 3:
+        logging.error(f"🛒 [CONFIRM_BUY] ❌ 数据格式错误, parts长度={len(parts)}")
         msg = "❌ Data format error" if lang != 'zh' else "❌ 数据格式错误"
-        query.answer(msg,show_alert=True)
+        query.answer(msg, show_alert=True)
         return
     
     nowuid = parts[0]
     quantity = int(parts[1])
     total_price = float(parts[2])
     
+    logging.info(f"🛒 [CONFIRM_BUY] nowuid={nowuid}, 数量={quantity}, 总价={total_price}")
+    
+    nowuid = parts[0]
+    quantity = int(parts[1])
+    total_price = float(parts[2])
+    
+    logging.info(f"🛒 [CONFIRM_BUY] nowuid={nowuid}, 数量={quantity}, 总价={total_price}")
+
     try:
+        logging.info(f"🛒 [CONFIRM_BUY] 开始获取商品信息...")
         # 获取商品信息
         product = ejfl.find_one({'nowuid': nowuid})
+        logging.info(f"🛒 [CONFIRM_BUY] 商品查询结果: {product is not None}")
+        
         if not product:
+            logging.error(f"🛒 [CONFIRM_BUY] ❌ 商品不存在:  {nowuid}")
             msg = "Product not found" if lang != 'zh' else "商品不存在"
-            query.answer(msg,show_alert=True)
+            query.answer(msg, show_alert=True)
             return
         
         product_name = product.get('projectname', '未知商品')
+        logging.info(f"🛒 [CONFIRM_BUY] 商品名称: {product_name}")
+        
         display_product = t(product_name, lang) if lang != 'zh' else product_name
         hq_price = float(product.get('money', 0))
         agent_price = hq_price * (1 + COMMISSION_RATE)
         hq_total_price = hq_price * quantity
         profit = total_price - hq_total_price
         
+        logging.info(f"🛒 [CONFIRM_BUY] 价格计算: 总部单价={hq_price}, 代理总价={total_price}, 利润={profit}")
+        
         # 获取商品类型
         fhtype = product.get('leixing', '协议号')
-        if not fhtype: 
-            stock_item = hb.find_one({'nowuid': nowuid, 'state': 0})
+        logging.info(f"🛒 [CONFIRM_BUY] 商品类型: {fhtype}")
+        
+        if not fhtype:  
+            stock_item = hb.find_one({'nowuid':  nowuid, 'state': 0})
             if stock_item:
                 fhtype = stock_item.get('leixing', '协议号')
             else:
                 fhtype = '协议号'
         
         # 检查库存
+        logging.info(f"🛒 [CONFIRM_BUY] 检查库存...")
         current_stock = get_real_time_stock(nowuid)
-        if current_stock < quantity: 
+        logging.info(f"🛒 [CONFIRM_BUY] 当前库存:  {current_stock}, 需要:  {quantity}")
+        
+        if current_stock < quantity:  
+            logging.error(f"🛒 [CONFIRM_BUY] ❌ 库存不足")
             msg = "❌ Out of stock" if lang != 'zh' else "❌ 库存不足"
-            query.answer(msg,show_alert=True)
+            query.answer(msg, show_alert=True)
             return
         
         # 获取用户余额
+        logging.info(f"🛒 [CONFIRM_BUY] 获取用户余额...")
         agent_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
         if not agent_user:
+            logging.error(f"🛒 [CONFIRM_BUY] ❌ 用户不存在")
             msg = "User not found" if lang != 'zh' else "用户不存在"
-            query.answer(msg,show_alert=True)
+            query.answer(msg, show_alert=True)
             return
         
         balance = agent_user.get('USDT', 0)
+        logging.info(f"🛒 [CONFIRM_BUY] 用户余额: {balance}, 需要: {total_price}")
         
         # 再次检查余额
-        if balance < total_price:
-            msg = "❌ Insufficient balance" if lang != 'zh' else "❌ 余额不足"
-            query.answer(msg,show_alert=True)
+        if balance < total_price: 
+            logging.error(f"🛒 [CONFIRM_BUY] ❌ 余额不足")
+            if lang == 'zh':
+                error_text = f"""❌ <b>余额不足</b>
+
+💰 您的余额:  {balance:.2f} USDT
+💵 需要支付: {total_price:.2f} USDT
+📉 差额: {total_price - balance:.2f} USDT
+
+请先充值后再购买！"""
+            else:
+                error_text = f"""❌ <b>Insufficient Balance</b>
+
+💰 Your balance:  {balance:.2f} USDT
+💵 Required: {total_price:.2f} USDT
+📉 Shortage: {total_price - balance:.2f} USDT
+
+Please recharge first! """
+            
+            keyboard = [[InlineKeyboardButton("🔙 返回" if lang == 'zh' else "🔙 Back", callback_data="back_to_main")]]
+            query.edit_message_text(
+                text=error_text,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
             return
+        
+        logging.info(f"🛒 [CONFIRM_BUY] ✅ 所有检查通过，开始执行购买...")
         
         # 扣减余额
         agent_users = get_agent_bot_user_collection(AGENT_BOT_ID)
@@ -2368,44 +2571,44 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
             'delivery_type': fhtype
         })
         
-        # 发送订单通知到群组
-        try:
-            updated_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
-            total_spent = updated_user.get('zgje', 0) if updated_user else 0
-            new_balance = updated_user.get('USDT', 0) if updated_user else 0
-            
-            total_orders_count = agent_orders.count_documents({
-                'agent_bot_id':  AGENT_BOT_ID,
-                'customer_id': user_id,
-                'status':  'completed'
-            })
-            
-            profit_per_unit = profit / quantity if quantity > 0 else 0
-            
-            order_notify_data = {
-                'username': username,
-                'user_id': user_id,
-                'order_id': order_id,
-                'order_time': order_time,
-                'category': fhtype,
-                'product_name': product_name,
-                'quantity': quantity,
-                'total_price': total_price,
-                'hq_total_price': hq_total_price,
-                'agent_price': agent_price,
-                'profit': profit,
-                'profit_per_unit':  profit_per_unit,
-                'old_balance': balance,
-                'new_balance': new_balance,
-                'total_spent': total_spent,
-                'total_orders':  total_orders_count
-            }
-            
-            send_order_notify_to_group('purchase', order_notify_data, bot=context.bot)
-        except Exception as notify_error:
-            logging.error(f"❌ 发送购买订单通知失败:  {notify_error}")
-        
-        # 记录购买记录到代理gmjlu
+# MOVED_TO_AFTER_DELIVERY:          # 发送订单通知到群组
+# MOVED_TO_AFTER_DELIVERY:          try:
+# MOVED_TO_AFTER_DELIVERY:              updated_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
+# MOVED_TO_AFTER_DELIVERY:              total_spent = updated_user.get('zgje', 0) if updated_user else 0
+# MOVED_TO_AFTER_DELIVERY:              new_balance = updated_user.get('USDT', 0) if updated_user else 0
+# MOVED_TO_AFTER_DELIVERY:              
+# MOVED_TO_AFTER_DELIVERY:              total_orders_count = agent_orders.count_documents({
+# MOVED_TO_AFTER_DELIVERY:                  'agent_bot_id':  AGENT_BOT_ID,
+# MOVED_TO_AFTER_DELIVERY:                  'customer_id': user_id,
+# MOVED_TO_AFTER_DELIVERY:                  'status':  'completed'
+# MOVED_TO_AFTER_DELIVERY:              })
+# MOVED_TO_AFTER_DELIVERY:              
+# MOVED_TO_AFTER_DELIVERY:              profit_per_unit = profit / quantity if quantity > 0 else 0
+# MOVED_TO_AFTER_DELIVERY:              
+# MOVED_TO_AFTER_DELIVERY:              order_notify_data = {
+# MOVED_TO_AFTER_DELIVERY:                  'username': username,
+# MOVED_TO_AFTER_DELIVERY:                  'user_id': user_id,
+# MOVED_TO_AFTER_DELIVERY:                  'order_id': order_id,
+# MOVED_TO_AFTER_DELIVERY:                  'order_time': order_time,
+# MOVED_TO_AFTER_DELIVERY:                  'category': fhtype,
+# MOVED_TO_AFTER_DELIVERY:                  'product_name': product_name,
+# MOVED_TO_AFTER_DELIVERY:                  'quantity': quantity,
+# MOVED_TO_AFTER_DELIVERY:                  'total_price': total_price,
+# MOVED_TO_AFTER_DELIVERY:                  'hq_total_price': hq_total_price,
+# MOVED_TO_AFTER_DELIVERY:                  'agent_price': agent_price,
+# MOVED_TO_AFTER_DELIVERY:                  'profit': profit,
+# MOVED_TO_AFTER_DELIVERY:                  'profit_per_unit':  profit_per_unit,
+# MOVED_TO_AFTER_DELIVERY:                  'old_balance': balance,
+# MOVED_TO_AFTER_DELIVERY:                  'new_balance': new_balance,
+# MOVED_TO_AFTER_DELIVERY:                  'total_spent': total_spent,
+# MOVED_TO_AFTER_DELIVERY:                  'total_orders':  total_orders_count
+# MOVED_TO_AFTER_DELIVERY:              }
+# MOVED_TO_AFTER_DELIVERY:              
+# MOVED_TO_AFTER_DELIVERY:              send_order_notify_to_group('purchase', order_notify_data, bot=context.bot)
+# MOVED_TO_AFTER_DELIVERY:          except Exception as notify_error:
+# MOVED_TO_AFTER_DELIVERY:              logging.error(f"❌ 发送购买订单通知失败:  {notify_error}")
+# MOVED_TO_AFTER_DELIVERY:          
+# MOVED_TO_AFTER_DELIVERY:          # 记录购买记录到代理gmjlu
         agent_gmjlu = get_agent_bot_gmjlu_collection(AGENT_BOT_ID)
         agent_gmjlu.insert_one({
             'leixing': 'purchase',
@@ -2442,7 +2645,7 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
         # 根据商品类型发送账号
         if fhtype == '协议号':
             # 使用带检测的发货功能
-            success, refund_amount = send_account_files_with_detection(
+            success, refund_amount, detection_result = send_account_files_with_detection(
                 context, user_id, nowuid, quantity, product_name, agent_price, order_id, username, fullname, delivery_format
             )
             
@@ -2511,6 +2714,62 @@ def confirm_buy_product(update: Update, context:  CallbackContext):
                 )
                 
                 logging.info(f"✅ 退款处理完成: user={user_id}, refund={refund_amount:.2f}")
+
+            # ===== 发送订单通知（使用实际交付数量计算利润）=====
+            try:
+                # 从检测结果获取数量
+                normal_count = detection_result.get("normal", 0)
+                banned_count = detection_result.get("banned", 0)
+                frozen_count = detection_result.get("frozen", 0)
+                unknown_count = detection_result.get("unknown", 0)
+                delivered_count = normal_count + unknown_count
+                
+                # 计算实际利润
+                actual_profit = delivered_count * (agent_price - hq_price) if delivered_count > 0 else 0
+                actual_total_price = delivered_count * agent_price
+                actual_hq_total_price = delivered_count * hq_price
+                profit_per_unit = agent_price - hq_price
+                
+                updated_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
+                total_spent = updated_user.get("zgje", 0) if updated_user else 0
+                new_balance = updated_user.get("USDT", 0) if updated_user else 0
+                
+                total_orders_count = agent_orders.count_documents({
+                    "agent_bot_id": AGENT_BOT_ID,
+                    "customer_id": user_id,
+                    "status": "completed"
+                })
+                
+                order_notify_data = {
+                    "username":  username,
+                    "user_id": user_id,
+                    "order_id":  order_id,
+                    "order_time": order_time,
+                    "category":  fhtype,
+                    "product_name": product_name,
+                    "original_quantity": quantity,
+                    "normal_count": normal_count,
+                    "banned_count":  banned_count,
+                    "frozen_count": frozen_count,
+                    "unknown_count": unknown_count,
+                    "delivered_count": delivered_count,
+                    "total_price": actual_total_price,
+                    "hq_total_price": actual_hq_total_price,
+                    "agent_price": agent_price,
+                    "profit": actual_profit,
+                    "profit_per_unit": profit_per_unit,
+                    "old_balance":  balance,
+                    "new_balance": new_balance,
+                    "total_spent":  total_spent,
+                    "total_orders": total_orders_count
+                }
+                
+                send_order_notify_to_group("purchase", order_notify_data, bot=context.bot)
+                logging.info(f"✅ 订单通知已发送:  delivered={delivered_count}, profit={actual_profit:.2f}")
+            except Exception as notify_error:
+                logging.error(f"❌ 发送购买订单通知失败: {notify_error}")
+            # ===== 订单通知结束 =====
+
         else:
             accounts = list(hb.find({"nowuid": nowuid, 'state': 0}).limit(quantity))
             
