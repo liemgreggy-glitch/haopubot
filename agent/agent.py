@@ -2181,6 +2181,40 @@ def send_account_files_with_detection(context: CallbackContext, user_id: int, no
         logging.info(f"🗑️ 从数据库删除 {len(bad_account_ids)} 个坏号记录")
         hb.delete_many({"_id": {"$in": bad_account_ids}})
     
+    # 发送购买完成后的按钮消息
+    if lang == 'zh':
+        thank_you_text = """━━━━━━━━━━━━━━━━━━━━
+🎉 感谢您的购买！
+
+如需继续购买，请点击下方按钮
+
+━━━━━━━━━━━━━━━━━━━━"""
+        keyboard = [
+            [
+                InlineKeyboardButton("🛒 继续购买", callback_data="product_list"),
+                InlineKeyboardButton("📋 我的订单", callback_data="my_orders")
+            ]
+        ]
+    else:
+        thank_you_text = """━━━━━━━━━━━━━━━━━━━━
+🎉 Thank you for your purchase!
+
+Click the button below to continue
+
+━━━━━━━━━━━━━━━━━━━━"""
+        keyboard = [
+            [
+                InlineKeyboardButton("🛒 Continue Shopping", callback_data="product_list"),
+                InlineKeyboardButton("📋 My Orders", callback_data="my_orders")
+            ]
+        ]
+    
+    context.bot.send_message(
+        chat_id=user_id,
+        text=thank_you_text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
     return True, refund_amount, {'normal':  normal_count, 'banned':  banned_count, 'frozen':  frozen_count, 'unknown':  unknown_count}
 
 
@@ -2693,7 +2727,8 @@ Please recharge first! """
                     {
                         '$set': {
                             'refund_amount': refund_amount,
-                            'final_price': total_price - refund_amount
+                            'final_price': total_price - refund_amount,
+                            'detection_result': detection_result
                         }
                     }
                 )
@@ -2714,6 +2749,16 @@ Please recharge first! """
                 )
                 
                 logging.info(f"✅ 退款处理完成: user={user_id}, refund={refund_amount:.2f}")
+            else:
+                # 即使没有退款，也要保存检测结果
+                agent_orders.update_one(
+                    {'order_id': order_id},
+                    {
+                        '$set': {
+                            'detection_result': detection_result
+                        }
+                    }
+                )
 
             # ===== 发送订单通知（使用实际交付数量计算利润）=====
             try:
@@ -3574,7 +3619,113 @@ def show_order_detail(update: Update, context:   CallbackContext):
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+
+def show_my_orders(update: Update, context: CallbackContext):
+    """显示用户的订单记录 (最近10笔)"""
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    lang = get_user_lang(user_id)
+    
+    # 从agent_orders集合获取用户最近10笔订单
+    orders = list(
+        agent_orders.find({
+            'agent_bot_id': AGENT_BOT_ID,
+            'customer_id': user_id
+        }).sort('order_time', -1).limit(10)
+    )
+    
+    if not orders:
+        if lang == 'zh':
+            text = "📋 我的订单记录\n\n暂无订单记录"
+            keyboard = [[InlineKeyboardButton("🔙 返回", callback_data="back_to_main")]]
+        else:
+            text = "📋 My Orders\n\nNo order records"
+            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]]
+    else:
+        if lang == 'zh':
+            text = f"📋 我的订单记录 (最近{len(orders)}笔)\n\n"
+        else:
+            text = f"📋 My Orders (Recent {len(orders)})\n\n"
         
+        # 构建订单列表
+        for i, order in enumerate(orders, 1):
+            order_time = order.get('order_time', '')
+            # 格式化时间 (显示: 2026-01-21 11:38)
+            order_time_display = order_time[:16] if len(order_time) >= 16 else order_time
+            
+            product_name = order.get('product_name') or ('未知商品' if lang == 'zh' else 'Unknown Product')
+            # 翻译商品名
+            display_product = t(product_name, lang)
+            
+            quantity = order.get('quantity', 0)
+            total_price = order.get('total_price', 0)
+            
+            # 获取检测结果
+            detection_result = order.get('detection_result', {})
+            normal_count = detection_result.get('normal', 0)
+            banned_count = detection_result.get('banned', 0)
+            frozen_count = detection_result.get('frozen', 0)
+            unknown_count = detection_result.get('unknown', 0)
+            
+            text += "━━━━━━━━━━━━━━━━━━━━\n"
+            
+            # 检查是否有检测结果
+            has_detection_results = any([normal_count, banned_count, frozen_count, unknown_count])
+            
+            if lang == 'zh':
+                text += f"🕐 {order_time_display}\n"
+                text += f"📦 {display_product} × {quantity}个\n"
+                text += f"💰 实付: {total_price:.2f} USDT\n"
+                
+                # 只有当有检测结果时才显示
+                if has_detection_results:
+                    text += f"✅ 存活: {normal_count}"
+                    if banned_count > 0:
+                        text += f" | ❌ 封禁: {banned_count}"
+                    if frozen_count > 0:
+                        text += f" | ⚠️ 冻结: {frozen_count}"
+                    if unknown_count > 0:
+                        text += f" | ❓ 未知: {unknown_count}"
+                    text += "\n"
+            else:
+                text += f"🕐 {order_time_display}\n"
+                text += f"📦 {display_product} × {quantity} pcs\n"
+                text += f"💰 Paid: {total_price:.2f} USDT\n"
+                
+                # 只有当有检测结果时才显示
+                if has_detection_results:
+                    text += f"✅ Normal: {normal_count}"
+                    if banned_count > 0:
+                        text += f" | ❌ Banned: {banned_count}"
+                    if frozen_count > 0:
+                        text += f" | ⚠️ Frozen: {frozen_count}"
+                    if unknown_count > 0:
+                        text += f" | ❓ Unknown: {unknown_count}"
+                    text += "\n"
+            
+            text += "\n"
+        
+        # 添加返回按钮
+        if lang == 'zh':
+            keyboard = [[InlineKeyboardButton("⬅️ 返回", callback_data="back_to_main")]]
+        else:
+            keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="back_to_main")]]
+    
+    # 删除原消息并发送新消息
+    try:
+        query.message.delete()
+    except Exception as e:
+        logging.debug(f"删除消息失败: {e}")
+    
+    context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 def show_switch_lang(update: Update, context: CallbackContext):
     """显示语言切换菜单"""
     query = update.callback_query
@@ -5659,7 +5810,7 @@ def main():
     
     # 用户中心相关
     #dispatcher.add_handler(CallbackQueryHandler(show_user_center, pattern='^user_center$'))
-    #dispatcher.add_handler(CallbackQueryHandler(show_my_orders, pattern='^my_orders$'))
+    dispatcher.add_handler(CallbackQueryHandler(show_my_orders, pattern='^my_orders$'))
     dispatcher.add_handler(CallbackQueryHandler(show_recharge, pattern='^recharge$'))
     dispatcher.add_handler(CallbackQueryHandler(show_contact_support, pattern='^contact_support$'))
     dispatcher.add_handler(CallbackQueryHandler(show_purchase_notice, pattern='^purchase_notice$'))
