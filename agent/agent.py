@@ -16,7 +16,7 @@ import shutil
 from io import BytesIO
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 
 # opentele (for TData format support)
@@ -187,6 +187,27 @@ def get_user_lang(user_id):
     """获取用户语言设置"""
     agent_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
     return agent_user.get('lang', 'zh') if agent_user else 'zh'
+
+
+def get_bottom_menu(lang='zh'):
+    """获取底部固定菜单"""
+    if lang == 'zh':
+        keyboard = [
+            [
+                KeyboardButton("🛍 账号列表"),
+                KeyboardButton("💰 充值余额"),
+                KeyboardButton("📞 联系客服")
+            ]
+        ]
+    else:
+        keyboard = [
+            [
+                KeyboardButton("🛍 Account List"),
+                KeyboardButton("💰 Recharge"),
+                KeyboardButton("📞 Contact Support")
+            ]
+        ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
 def init_agent_bot():
     """初始化代理Bot - 从环境变量读取配置"""
@@ -2209,6 +2230,13 @@ Click the button below to continue
             ]
         ]
     
+    context.bot.send_message(
+        chat_id=user_id,
+        text=thank_you_text,
+        reply_markup=get_bottom_menu(lang)
+    )
+    
+    # 再发送带内联按钮的消息
     context.bot.send_message(
         chat_id=user_id,
         text=thank_you_text,
@@ -5768,6 +5796,175 @@ def close_message(update: Update, context: CallbackContext):
             logging.warning(f"强制删除消息也失败: {e2}")
 
 
+def show_product_list_from_message(update: Update, context: CallbackContext):
+    """从消息调用商品列表（用于底部菜单）"""
+    user_id = update.message.from_user.id
+    lang = get_user_lang(user_id)
+    
+    # 获取所有一级分类
+    categories = list(fenlei.find({}).sort('row', 1))
+    
+    if not categories:
+        update.message.reply_text("暂无商品分类" if lang == 'zh' else "No product categories")
+        return
+    
+    if lang == 'zh':
+        text = """🛒 <b>商品分类</b> - 请选择所需：
+
+❗ 首次购买请先少量测试，避免纠纷！
+
+❗ 长期未使用账户可能会出现问题，联系客服处理"""
+    else:
+        text = """🛒 <b>Product Categories</b> - Please select: 
+
+❗ Please test with small quantity for first purchase! 
+
+❗ Long unused accounts may have issues, contact support"""
+    
+    keyboard = []
+    for category in categories: 
+        uid = category.get('uid')
+        category_name = category.get('projectname', '未知分类')
+        
+        # 获取该分类下的所有商品
+        products = list(ejfl.find({'uid': uid}))
+        
+        # 统计该分类下所有商品的总库存数量
+        total_stock = sum(get_real_time_stock(product.get('nowuid')) for product in products if product.get('nowuid'))
+        
+        if total_stock > 0:
+            # 翻译分类名称
+            display_name = t(category_name, lang) if lang != 'zh' else category_name
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{display_name} ({total_stock})",
+                    callback_data=f"category_{uid}"
+                )
+            ])
+    
+    back_text = "🔙 返回主菜单" if lang == 'zh' else "🔙 Back to Main"
+    keyboard.append([InlineKeyboardButton(back_text, callback_data="back_to_main")])
+    
+    context.bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def show_recharge_from_message(update: Update, context: CallbackContext):
+    """从消息调用充值页面（用于底部菜单）"""
+    user_id = update.message.from_user.id
+    
+    # 创建一个模拟的 CallbackQuery 对象来调用现有的 show_recharge 函数
+    # 由于 show_recharge 需要 CallbackQuery，我们直接复制其核心逻辑
+    lang = get_user_lang(user_id)
+    
+    # 获取用户余额
+    agent_user = get_agent_bot_user(AGENT_BOT_ID, user_id)
+    balance = agent_user.get('USDT', 0) if agent_user else 0
+    
+    if lang == 'zh':
+        text = f"""💰 <b>充值余额</b>
+
+<b>当前余额：</b>{balance:.2f} USDT
+
+请选择充值金额："""
+    else:
+        text = f"""💰 <b>Recharge Balance</b>
+
+<b>Current Balance：</b>{balance:.2f} USDT
+
+Please select amount:"""
+    
+    # 设置充值金额选项
+    amounts = [10, 20, 50, 100, 200, 500]
+    keyboard = []
+    
+    # 两列布局
+    for i in range(0, len(amounts), 2):
+        row = []
+        for j in range(2):
+            if i + j < len(amounts):
+                amount = amounts[i + j]
+                row.append(InlineKeyboardButton(
+                    f"{amount} USDT",
+                    callback_data=f"recharge_amount_{amount}"
+                ))
+        keyboard.append(row)
+    
+    # 自定义金额
+    if lang == 'zh':
+        keyboard.append([InlineKeyboardButton("💵 自定义金额", callback_data="recharge_custom")])
+        keyboard.append([InlineKeyboardButton("🔙 返回", callback_data="back_to_main")])
+    else:
+        keyboard.append([InlineKeyboardButton("💵 Custom Amount", callback_data="recharge_custom")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
+    
+    context.bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def show_contact_support_from_message(update: Update, context: CallbackContext):
+    """从消息调用联系客服（用于底部菜单）"""
+    user_id = update.message.from_user.id
+    lang = get_user_lang(user_id)
+    
+    # 获取客服信息
+    customer_service = AGENT_INFO.get('settings', {}).get('customer_service', CUSTOMER_SERVICE)
+    
+    if lang == 'zh':
+        text = f"""📞 <b>联系客服</b>
+
+如有任何问题，请联系我们的客服：
+
+{customer_service}
+
+工作时间：24小时在线"""
+    else:
+        text = f"""📞 <b>Contact Support</b>
+
+For any questions, please contact our support:
+
+{customer_service}
+
+Working Hours: 24/7 Online"""
+    
+    keyboard = [[InlineKeyboardButton("🔙 返回" if lang == 'zh' else "🔙 Back", callback_data="back_to_main")]]
+    
+    context.bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def handle_bottom_menu(update: Update, context: CallbackContext):
+    """处理底部菜单按钮"""
+    text = update.message.text
+    user_id = update.message.from_user.id
+    
+    # 获取用户语言
+    lang = get_user_lang(user_id)
+    
+    # 中文和英文按钮
+    if text in ["🛍 账号列表", "🛍 Account List"]:
+        # 跳转到商品分类
+        show_product_list_from_message(update, context)
+    elif text in ["💰 充值余额", "💰 Recharge"]:
+        # 跳转到充值页面
+        show_recharge_from_message(update, context)
+    elif text in ["📞 联系客服", "📞 Contact Support"]:
+        # 显示客服信息
+        show_contact_support_from_message(update, context)
+
+
 def main():
     """主函数"""
     # 初始化代理Bot
@@ -5794,6 +5991,12 @@ def main():
     # 注册命令处理器
     dispatcher.add_handler(CommandHandler('start', start))
     dispatcher.add_handler(CommandHandler('admin', admin_command))
+    
+    # 底部菜单按钮处理（需要放在其他 MessageHandler 之前）
+    dispatcher.add_handler(MessageHandler(
+        Filters.text & Filters.regex(r'^(🛍 账号列表|🛍 Account List|💰 充值余额|💰 Recharge|📞 联系客服|📞 Contact Support)$'),
+        handle_bottom_menu
+    ))
     
     # 注册消息处理器（用于处理购买数量输入和提现地址输入）
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_quantity_input))
