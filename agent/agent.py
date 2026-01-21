@@ -2727,7 +2727,8 @@ Please recharge first! """
                     {
                         '$set': {
                             'refund_amount': refund_amount,
-                            'final_price': total_price - refund_amount
+                            'final_price': total_price - refund_amount,
+                            'detection_result': detection_result
                         }
                     }
                 )
@@ -2748,6 +2749,16 @@ Please recharge first! """
                 )
                 
                 logging.info(f"✅ 退款处理完成: user={user_id}, refund={refund_amount:.2f}")
+            else:
+                # 即使没有退款，也要保存检测结果
+                agent_orders.update_one(
+                    {'order_id': order_id},
+                    {
+                        '$set': {
+                            'detection_result': detection_result
+                        }
+                    }
+                )
 
             # ===== 发送订单通知（使用实际交付数量计算利润）=====
             try:
