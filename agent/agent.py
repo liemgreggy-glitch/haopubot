@@ -3655,9 +3655,9 @@ def show_my_orders(update: Update, context: CallbackContext):
             # 格式化时间 (显示: 2026-01-21 11:38)
             order_time_display = order_time[:16] if len(order_time) >= 16 else order_time
             
-            product_name = order.get('product_name', '未知商品' if lang == 'zh' else 'Unknown Product')
+            product_name = order.get('product_name') or ('未知商品' if lang == 'zh' else 'Unknown Product')
             # 翻译商品名
-            display_product = t(product_name, lang) if lang != 'zh' else product_name
+            display_product = t(product_name, lang)
             
             quantity = order.get('quantity', 0)
             total_price = order.get('total_price', 0)
@@ -3671,13 +3671,16 @@ def show_my_orders(update: Update, context: CallbackContext):
             
             text += "━━━━━━━━━━━━━━━━━━━━\n"
             
+            # 检查是否有检测结果
+            has_detection_results = any([normal_count, banned_count, frozen_count, unknown_count])
+            
             if lang == 'zh':
                 text += f"🕐 {order_time_display}\n"
                 text += f"📦 {display_product} × {quantity}个\n"
                 text += f"💰 实付: {total_price:.2f} USDT\n"
                 
                 # 只有当有检测结果时才显示
-                if normal_count > 0 or banned_count > 0 or frozen_count > 0 or unknown_count > 0:
+                if has_detection_results:
                     text += f"✅ 存活: {normal_count}"
                     if banned_count > 0:
                         text += f" | ❌ 封禁: {banned_count}"
@@ -3692,7 +3695,7 @@ def show_my_orders(update: Update, context: CallbackContext):
                 text += f"💰 Paid: {total_price:.2f} USDT\n"
                 
                 # 只有当有检测结果时才显示
-                if normal_count > 0 or banned_count > 0 or frozen_count > 0 or unknown_count > 0:
+                if has_detection_results:
                     text += f"✅ Normal: {normal_count}"
                     if banned_count > 0:
                         text += f" | ❌ Banned: {banned_count}"
